@@ -88,7 +88,6 @@ handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
 
 
 handle_call({joinroom, {PlayerPid, RoomId}}, _From, State) ->
-    io:format("~p, joinroom, RoomId = ~p, State = ~p~n", [?MODULE, RoomId, State]),
     case dict:find(RoomId, State) of
         {ok, [{_, RoomPid}]} ->
             ok = gen_server:call(RoomPid, {join, PlayerPid}),

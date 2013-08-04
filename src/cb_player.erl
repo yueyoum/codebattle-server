@@ -16,7 +16,7 @@
 -include("../include/cb.hrl").
 
 -record(room, {id, pid}).
--record(state, {sock, marine=#marine{}, room=#room{}}).
+-record(state, {sock, marine=dict:new(), room=#room{}}).
 -define(TIMEOUT, 1000 * 600).
 
 %%%===================================================================
@@ -81,8 +81,28 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({broadcast, #marine{}=Marine}, #state{sock=Sock} = State) ->
-    updateresponse(Sock, Marine),
+handle_cast({broadcast, #marine{}=Marine}, #state{sock=Sock, marine=MyMarines} = State) ->
+    Tag =
+    case is_own_marine(Marine#marine.id, MyMarines) of
+        true -> "OwnMarine";
+        false -> "EnemyMarine"
+    end,
+
+    Msg = api_pb:encode_message({message,
+        senceupdate,
+        undefined,
+        {senceupdate, {marine,
+            Marine#marine.id,
+            Marine#marine.name,
+            Tag,
+            Marine#marine.hpMax,
+            Marine#marine.hp,
+            {vector2, Marine#marine.position#vector2.x, Marine#marine.position#vector2.z},
+            Marine#marine.status
+            }}
+        }),
+
+    ok = gen_tcp:send(Sock, Msg),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -173,34 +193,33 @@ joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
         undefined ->
             case cb_room_manager:joinroom(self(), RoomId) of
                 {ok, {RoomId, RoomPid}} ->
-                    cmdresponse(Sock, joinroom),
+                    cmdresponse(Sock, {joinroom, RoomId}),
                     State#state{room=#room{id=RoomId, pid=RoomPid}};
                 notfound ->
-                    cmdresponse(Sock, joinroom, 5),
+                    cmdresponse(Sock, joinroom, 3),
                     State
             end;
         _ ->
-            cmdresponse(Sock, joinroom, 4),
+            cmdresponse(Sock, joinroom, 2),
             State
     end.
 
 
 
-createmarine({createmarine, RoomId, Name}, #state{sock=Sock, marine=_Marine, room=Room} = State) ->
-    io:format("createmarine, ReqRoomId = ~p, RoomId = ~p~n", [RoomId, Room#room.id]),
+createmarine({createmarine, RoomId, Name, {vector2, X, Z}}, #state{sock=Sock, marine=_Marine, room=Room} = State) ->
     case Room#room.id of
         undefined ->
-            cmdresponse(Sock, createmarine, 2),
+            cmdresponse(Sock, createmarine, 5),
             State;
         RoomId ->
             MarineId = utils:random_int(),
-            Marine = #marine{id=MarineId, name=Name},
+            Marine = #marine{id=MarineId, name=Name, position=#vector2{x=X, z=Z}},
             cmdresponse(Sock, {createmarine, MarineId}),
-            io:format("~p, createmarine cmdresponse done~n", [?MODULE]),
-            cb_room_manager:broadcast(RoomId, Marine),
-            State#state{marine=Marine};
+            %% cb_room_manager:broadcast(RoomId, Marine),
+            gen_server:cast(Room#room.pid, {broadcast, Marine}),
+            State#state{marine=dict:append(MarineId, Marine, _Marine)};
         _ ->
-            cmdresponse(Sock, createmarine, 3),
+            cmdresponse(Sock, createmarine, 6),
             State
     end.
 
@@ -213,19 +232,10 @@ marineoperate(Data, State) ->
 cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
     Msg = api_pb:encode_message({message,
         cmdresponse,
-        {cmdresponse, RetCode, Cmd, undefined, undefined},
+        {cmdresponse, RetCode, Cmd, undefined, undefined, undefined},
         undefined}),
     ok = gen_tcp:send(Sock, Msg),
     ok.
-
-cmdresponse(Sock, joinroom) ->
-    Msg = api_pb:encode_message({message,
-        cmdresponse,
-        {cmdresponse, 0, joinroom, undefined, undefined},
-        undefined
-        }),
-    ok = gen_tcp:send(Sock, Msg),
-    ok;
 
 cmdresponse(Sock, {Cmd, Value}) ->
     Msg =
@@ -233,13 +243,19 @@ cmdresponse(Sock, {Cmd, Value}) ->
         createroom ->
             api_pb:encode_message({message,
                 cmdresponse,
-                {cmdresponse, 0, Cmd, {createroomresponse, Value}, undefined},
+                {cmdresponse, 0, Cmd, {createroomresponse, Value, {vector2int, 50, 50}}, undefined, undefined},
+                undefined
+                });
+        joinroom ->
+            api_pb:encode_message({message,
+                cmdresponse,
+                {cmdresponse, 0, Cmd, undefined, {joinroomresponse, Value, {vector2int, 50, 50}}, undefined},
                 undefined
                 });
         createmarine ->
             api_pb:encode_message({message,
                 cmdresponse,
-                {cmdresponse, 0, Cmd, undefined, {createmarineresponse, Value}},
+                {cmdresponse, 0, Cmd, undefined, undefined, {createmarineresponse, Value}},
                 undefined
                 })
     end,
@@ -247,22 +263,6 @@ cmdresponse(Sock, {Cmd, Value}) ->
     ok.
 
 
-updateresponse(Sock, Marine) ->
-    Msg = api_pb:encode_message({message,
-        senceupdate,
-        undefined,
-        {senceupdate, {marine,
-            Marine#marine.id,
-            Marine#marine.name,
-            "Marine",
-            100,
-            Marine#marine.hp,
-            {vector2, Marine#marine.position#vector2.x, Marine#marine.position#vector2.z},
-            {vector2, 0.5, 0.5},
-            %%Marine#marine.status
-            'Run'
-            }}
-        }),
 
-    ok = gen_tcp:send(Sock, Msg),
-    ok.
+is_own_marine(Id, MyMarines) ->
+    dict:is_key(Id, MyMarines).
