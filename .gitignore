@@ -1,6 +1,5 @@
 deps
 ebin
 include
-submodule
 
-*.proto
+src/*.proto
