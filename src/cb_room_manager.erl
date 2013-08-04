@@ -5,7 +5,7 @@
 %% API
 -export([start_link/0,
          createroom/2,
-         joinroom/1,
+         joinroom/2,
          broadcast/2]).
 
 %% gen_server callbacks
@@ -39,8 +39,8 @@ createroom(PlayerPid, MapId) ->
     gen_server:call(?MODULE, {createroom, {PlayerPid, MapId}}).
 
 
-joinroom(RoomId) ->
-    ok.
+joinroom(PlayerPid, RoomId) ->
+    gen_server:call(?MODULE, {joinroom, {PlayerPid, RoomId}}).
 
 
 broadcast(RoomId, #marine{} = Marine) ->
@@ -87,10 +87,16 @@ handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
     {reply, {ok, {RoomId, RoomPid}}, dict:append(RoomId, {PlayerPid, RoomPid}, State)};
 
 
-% handle_call({joinroom, RoomId}, {_, Sock}, State) ->
-%     case dict:find(RoomId, State) of ->
-%         {ok, RoomPid} ->
-%             joinroom()
+handle_call({joinroom, {PlayerPid, RoomId}}, _From, State) ->
+    io:format("~p, joinroom, RoomId = ~p, State = ~p~n", [?MODULE, RoomId, State]),
+    case dict:find(RoomId, State) of
+        {ok, [{_, RoomPid}]} ->
+            ok = gen_server:call(RoomPid, {join, PlayerPid}),
+            Reply = {ok, {RoomId, RoomPid}};
+        error ->
+            Reply = notfound
+    end,
+    {reply, Reply, State};
 
 
 handle_call({broadcast, {RoomId, Marine}}, _From, State) ->

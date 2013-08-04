@@ -3,7 +3,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3]).
+-export([start_link/3,
+         join/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -15,7 +16,6 @@
 
 
 -include("../include/cb.hrl").
-%% -record(player, {pid, marines=[]}).
 -record(state, {roomid, mapid, owner, players=[]}).
 
 %%%===================================================================
@@ -31,6 +31,9 @@
 %%--------------------------------------------------------------------
 start_link(OwnerPid, RoomId, MapId) ->
     gen_server:start_link(?MODULE, [OwnerPid, RoomId, MapId], []).
+
+join(PlayerPid) ->
+    gen_server:call(self(), {join, PlayerPid}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -65,9 +68,8 @@ init([OwnerPid, RoomId, MapId]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+handle_call({join, PlayerPid}, _From, #state{players=Players} = State) ->
+    {reply, ok, State#state{players=[PlayerPid | Players]}}.
 
 %%--------------------------------------------------------------------
 %% @private

@@ -97,12 +97,13 @@ handle_cast({broadcast, #marine{}=Marine}, #state{sock=Sock} = State) ->
 %%--------------------------------------------------------------------
 
 handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
-    {cmd, Cmd, Crm, Cme, Opt} = api_pb:decode_cmd(Data),
-    io:format("Player receive: ~p, ~p, ~p, ~p~n", [Cmd, Crm, Cme, Opt]),
+    {cmd, Cmd, Crm, Jrm, Cme, Opt} = api_pb:decode_cmd(Data),
+    io:format("Player receive: ~p, ~p, ~p, ~p, ~p~n", [Cmd, Crm, Jrm, Cme, Opt]),
 
     NewState =
     case Cmd of
         createroom -> createroom(Crm, State);
+        joinroom -> joinroom(Jrm, State);
         createmarine -> createmarine(Cme, State);
         marineoperate -> marineoperate(Opt, State)
     end,
@@ -167,6 +168,23 @@ createroom({createroom, MapId}, #state{sock=Sock, room=Room} = State) ->
             State
     end.
 
+joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
+    case Room#room.id of
+        undefined ->
+            case cb_room_manager:joinroom(self(), RoomId) of
+                {ok, {RoomId, RoomPid}} ->
+                    cmdresponse(Sock, joinroom),
+                    State#state{room=#room{id=RoomId, pid=RoomPid}};
+                notfound ->
+                    cmdresponse(Sock, joinroom, 5),
+                    State
+            end;
+        _ ->
+            cmdresponse(Sock, joinroom, 4),
+            State
+    end.
+
+
 
 createmarine({createmarine, RoomId, Name}, #state{sock=Sock, marine=_Marine, room=Room} = State) ->
     io:format("createmarine, ReqRoomId = ~p, RoomId = ~p~n", [RoomId, Room#room.id]),
@@ -193,9 +211,21 @@ marineoperate(Data, State) ->
 
 
 cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
-    Msg = api_pb:encode_message({message, cmdresponse, {cmdresponse, RetCode, Cmd}, undefined}),
+    Msg = api_pb:encode_message({message,
+        cmdresponse,
+        {cmdresponse, RetCode, Cmd, undefined, undefined},
+        undefined}),
     ok = gen_tcp:send(Sock, Msg),
     ok.
+
+cmdresponse(Sock, joinroom) ->
+    Msg = api_pb:encode_message({message,
+        cmdresponse,
+        {cmdresponse, 0, joinroom, undefined, undefined},
+        undefined
+        }),
+    ok = gen_tcp:send(Sock, Msg),
+    ok;
 
 cmdresponse(Sock, {Cmd, Value}) ->
     Msg =
