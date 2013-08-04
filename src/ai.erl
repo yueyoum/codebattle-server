@@ -15,7 +15,7 @@
 
 -include("../include/cb.hrl").
 
--record(state, {sock, roomid, own=#marine{}, others=dict:new()}).
+-record(state, {sock, roomid, mapx, mapz, ownid=sets:new(), own=dict:new(), others=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -51,7 +51,17 @@ init([RoomId]) ->
     Port = 8888,
     {ok, Sock} = gen_tcp:connect(IP, Port,
             [binary, inet, {reuseaddr, true}, {active, once}, {nodelay, true}, {packet, 4}]),
-    gen_server:cast(self(), {joinroom, RoomId}),
+
+    %% an ai must join a room before any action,
+    %% so It's ok that we do this in init function.
+    JoinroomRequest = api_pb:encode_cmd({cmd, joinroom,
+        undefined,
+        {joinroom, RoomId},
+        undefined,
+        undefined
+        }),
+
+    ok = gen_tcp:send(Sock, JoinroomRequest),
     {ok, #state{sock=Sock, roomid=RoomId}}.
 
 %%--------------------------------------------------------------------
@@ -82,14 +92,7 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({joinroom, RoomId}, #state{sock=Sock} = State) ->
-    Request = api_pb:encode_cmd({cmd, joinroom,
-        undefined,
-        {joinroom, RoomId},
-        undefined,
-        undefined
-        }),
-    gen_tcp:send(Sock, Request),
+handle_cast(_Request, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -107,10 +110,12 @@ handle_info({tcp, Sock, Data}, State) ->
     io:format("Got Server Data~n"),
     Reply =
     case parse_data(Data, State) of
-        {ok, NewState} -> {noreply, NewState};
-        error -> {stop, error_code, State}
+        {ok, NewState} ->
+            inet:setopts(Sock, [{active, once}]),
+            {noreply, NewState};
+        error ->
+            {stop, error_code, State}
     end,
-    inet:setopts(Sock, [{active, once}]),
     Reply;
 
 
@@ -167,33 +172,30 @@ parse_data(Data, State) ->
     end.
 
 
-cmdresponse({cmdresponse, 0, Cmd, _, CreateMarineResponse} = Data, State) ->
-    case Cmd of
-        joinroom ->
-            cmd_create_marine(State),
-            {ok, State};
-        createmarine ->
-            {createmarineresponse, MarineId} = CreateMarineResponse,
-            #state{sock=_, own=Own, others=_} = State,
-            {ok, State#state{own=Own#marine{id=MarineId}}};
-        marineoperate ->
-            {ok, State}
-    end;
+cmdresponse({cmdresponse, 0, joinroom, _, {joinroomresponse, _, {vector2int, X, Z}}, _}, State) ->
+    cmd_create_marine(State),
+    {ok, State#state{mapx=X, mapz=Z}};
 
-cmdresponse({cmdresponse, Ret, Cmd, _, _} = Data, State) ->
+cmdresponse({cmdresponse, 0, createmarine, _, _, {createmarineresponse, MarineId}}, #state{ownid=OwnId} = State) ->
+    {ok, State#state{ownid=sets:add_element(MarineId, OwnId)}};
+
+cmdresponse({cmdresponse, 0, marineoperate, _, _, _}, State) ->
+    {ok, State};
+
+cmdresponse({cmdresponse, Ret, Cmd, _, _, _}, _State) ->
     io:format("Cmd ~p Error, Error Code = ~p~n", [Cmd, Ret]),
     error.
 
-senceupdate({senceupdate, Marine} = Data, State) ->
+senceupdate({senceupdate, Marine}, State) ->
     {ok, State}.
 
 
 
-cmd_create_marine(#state{sock=Sock, roomid=RoomId} = State) ->
+cmd_create_marine(#state{sock=Sock, roomid=RoomId}) ->
     Cmd = api_pb:encode_cmd({cmd, createmarine,
         undefined,
         undefined,
-        {createmarine, RoomId, "AIbot"},
+        {createmarine, RoomId, "AIbot", {vector2, 10, 30}},
         undefined
         }),
 
