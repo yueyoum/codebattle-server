@@ -1,5 +1,6 @@
 deps
 ebin
-include
+include/*
+!include/cb.hrl
 
 src/*.proto
