@@ -5,7 +5,7 @@
 %% API
 -export([start_link/0,
          createroom/2,
-         joinroom/2,
+         joinroom/3,
          broadcast/2]).
 
 %% gen_server callbacks
@@ -19,7 +19,7 @@
 
 -include("../include/cb.hrl").
 
-%% -record(state, {}).
+-record(room, {owner, pid, token}).
 
 %%%===================================================================
 %%% API
@@ -39,12 +39,11 @@ createroom(PlayerPid, MapId) ->
     gen_server:call(?MODULE, {createroom, {PlayerPid, MapId}}).
 
 
-joinroom(PlayerPid, RoomId) ->
-    gen_server:call(?MODULE, {joinroom, {PlayerPid, RoomId}}).
+joinroom(PlayerPid, RoomId, Token) ->
+    gen_server:call(?MODULE, {joinroom, {PlayerPid, RoomId, Token}}).
 
 
 broadcast(RoomId, #marine{} = Marine) ->
-    io:format("~p, broadcast~n", [?MODULE]),
     gen_server:call(?MODULE, {broadcast, {RoomId, Marine}}).
 
 
@@ -83,15 +82,19 @@ init([]) ->
 %%--------------------------------------------------------------------
 handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
     RoomId = utils:random_int(),
+    Token = utils:random_list(),
     {ok, RoomPid} = cb_room_sup:create_room(PlayerPid, RoomId, MapId),
-    {reply, {ok, {RoomId, RoomPid}}, dict:append(RoomId, {PlayerPid, RoomPid}, State)};
+    {reply, {ok, {RoomId, RoomPid}}, dict:store(RoomId, #room{owner=PlayerPid, pid=RoomPid, token=Token}, State)};
 
 
-handle_call({joinroom, {PlayerPid, RoomId}}, _From, State) ->
+handle_call({joinroom, {PlayerPid, RoomId, Token}}, _From, State) ->
     case dict:find(RoomId, State) of
-        {ok, [{_, RoomPid}]} ->
+        {ok, #room{pid=RoomPid, token=Token}} ->
             ok = gen_server:call(RoomPid, {join, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
+            Reply = {ok, {unity3d, RoomId, RoomPid}};
+        {ok, #room{pid=RoomPid}} ->
+            ok = gen_server:call(RoomPid, {join, PlayerPid}),
+            Reply = {ok, {ai, RoomId, RoomPid}};
         error ->
             Reply = notfound
     end,
@@ -99,7 +102,7 @@ handle_call({joinroom, {PlayerPid, RoomId}}, _From, State) ->
 
 
 handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
-    {ok, [{_, RoomPid}]} = dict:find(RoomId, State),
+    {ok, #room{pid=RoomPid}} = dict:find(RoomId, State),
     gen_server:cast(RoomPid, {broadcast, Marine}),
     {reply, ok, State}.
 

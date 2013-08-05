@@ -16,7 +16,7 @@
 
 
 -include("../include/cb.hrl").
--record(state, {roomid, mapid, owner, players=[]}).
+-record(state, {roomid, mapid, owner, players=[], marines=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -69,7 +69,13 @@ init([OwnerPid, RoomId, MapId]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({join, PlayerPid}, _From, #state{players=Players} = State) ->
-    {reply, ok, State#state{players=[PlayerPid | Players]}}.
+    {reply, ok, State#state{players=[PlayerPid | Players]}};
+
+
+handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = State) ->
+    Reply = dict:find(MarineId, Marines),
+    {reply, Reply, State}.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -89,7 +95,24 @@ handle_cast({broadcast, Marine}, #state{players=Players} = State) ->
         end,
         Players
         ),
-    {noreply, State}.
+    {noreply, State};
+
+
+handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
+    lists:foreach(
+        fun(PlayerPid) ->
+            case PlayerPid of
+                IgnorePid -> ok;
+                _ -> gen_server:cast(PlayerPid, {broadcast, Marine})
+            end
+        end,
+        Players
+        ),
+    {noreply, State};
+
+
+handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) ->
+    {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}}.
 
 %%--------------------------------------------------------------------
 %% @private

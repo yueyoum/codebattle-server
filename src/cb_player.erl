@@ -16,7 +16,7 @@
 -include("../include/cb.hrl").
 
 -record(room, {id, pid}).
--record(state, {sock, marine=dict:new(), room=#room{}}).
+-record(state, {sock, marine=dict:new(), room=#room{}, roomowner=false, ai=true}).
 -define(TIMEOUT, 1000 * 600).
 
 %%%===================================================================
@@ -104,7 +104,26 @@ handle_cast({broadcast, #marine{}=Marine}, #state{sock=Sock, marine=MyMarines} =
         }),
 
     ok = gen_tcp:send(Sock, Msg),
-    {noreply, State}.
+    {noreply, State};
+
+
+handle_cast({marinereport, {marineoperate, Id, Status, {vector2, Cx, Cz}, Tp, _Tm}},
+    #state{sock=Sock, marine=MyMarines, room=Room} = State) ->
+    M = dict:fetch(Id, MyMarines),
+
+    NewTp =
+    case Tp of
+        undefined -> M#marine.position;
+        {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
+    end,
+    NewM = M#marine{position=#vector2{x=Cx, z=Cz}, status=Status, targetposition=NewTp},
+
+    gen_server:cast(Room#room.pid, {broadcast, NewM}),
+    {noreply, State#state{marine=dict:store(Id, NewM, MyMarines)}}.
+
+
+
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -124,6 +143,7 @@ handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
     NewState =
     case Cmd of
         createroom -> createroom(Crm, State);
+        marinereport -> marinereport(Opt, State);
         joinroom -> joinroom(Jrm, State);
         createmarine -> createmarine(Cme, State);
         marineoperate -> marineoperate(Opt, State)
@@ -183,19 +203,24 @@ createroom({createroom, MapId}, #state{sock=Sock, room=Room} = State) ->
         undefined ->
             {ok, {RoomId, RoomPid}} = cb_room_manager:createroom(self(), MapId),
             cmdresponse(Sock, {createroom, RoomId}),
-            State#state{room=#room{id=RoomId, pid=RoomPid}};
+            State#state{room=#room{id=RoomId, pid=RoomPid}, roomowner=true, ai=false};
         _ ->
             cmdresponse(Sock, createroom, 1),
             State
     end.
 
-joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
+joinroom({joinroom, RoomId, Token}, #state{sock=Sock, room=Room} = State) ->
     case Room#room.id of
         undefined ->
-            case cb_room_manager:joinroom(self(), RoomId) of
-                {ok, {RoomId, RoomPid}} ->
+            case cb_room_manager:joinroom(self(), RoomId, Token) of
+                {ok, {PlayerType, RoomId, RoomPid}} ->
                     cmdresponse(Sock, {joinroom, RoomId}),
-                    State#state{room=#room{id=RoomId, pid=RoomPid}};
+                    AI =
+                    case PlayerType of
+                        unity3d -> false;
+                        ai -> true
+                    end,
+                    State#state{room=#room{id=RoomId, pid=RoomPid}, ai=AI};
                 notfound ->
                     cmdresponse(Sock, joinroom, 3),
                     State
@@ -214,9 +239,9 @@ createmarine({createmarine, RoomId, Name, {vector2, X, Z}}, #state{sock=Sock, ma
             State;
         RoomId ->
             MarineId = utils:random_int(),
-            Marine = #marine{id=MarineId, name=Name, position=#vector2{x=X, z=Z}},
+            Marine = #marine{id=MarineId, name=Name, position=#vector2{x=X, z=Z}, targetposition=#vector2{x=X, z=Z}},
             cmdresponse(Sock, {createmarine, MarineId}),
-            %% cb_room_manager:broadcast(RoomId, Marine),
+            gen_server:cast(Room#room.pid, {new_marine, MarineId, self()}),
             gen_server:cast(Room#room.pid, {broadcast, Marine}),
             State#state{marine=dict:store(MarineId, Marine, OwnMarines)};
         _ ->
@@ -225,8 +250,15 @@ createmarine({createmarine, RoomId, Name, {vector2, X, Z}}, #state{sock=Sock, ma
     end.
 
 
-marineoperate({marineoperate, Id, Status, {vector2, Cx, Cz}, TargetPosition, TargetId} = Data,
-    #state{sock=Sock, marine=OwnMarines, room=Room} = State) ->
+marineoperate({marineoperate, Id, Status, {vector2, Cx, Cz}, TargetPosition, TargetId},
+    #state{sock=Sock, marine=OwnMarines, room=Room, ai=false} = State) ->
+    %% Send from Unity3d, Check for this
+    % case AI of
+    %     true -> throw(invalid_cmd);
+    %     false -> ok
+    % end,
+    io:format("marineoperate from Unity3d~n"),
+
     case Room#room.pid of
         undefined ->
             cmdresponse(Sock, marineoperate, 10),
@@ -234,7 +266,38 @@ marineoperate({marineoperate, Id, Status, {vector2, Cx, Cz}, TargetPosition, Tar
         RoomPid ->
             case dict:find(Id, OwnMarines) of
                 {ok, M} ->
-                    NewM = M#marine{status=Status, position=#vector2{x=Cx, z=Cz}},
+                    NewTargetPosition =
+                    case TargetPosition of
+                        undefined -> #vector2{x=Cx, z=Cz};
+                        {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
+                    end,
+                    NewM = M#marine{status=Status, position=#vector2{x=Cx, z=Cz}, targetposition=NewTargetPosition},
+                    gen_server:cast(RoomPid, {broadcast, NewM}),
+                    State#state{marine=dict:store(Id, NewM, OwnMarines)};
+                error ->
+                    cmdresponse(Sock, marineoperate, 11),
+                    State
+            end
+    end;
+
+marineoperate({marineoperate, Id, Status, undefined, TargetPosition, TargetId},
+    #state{sock=Sock, marine=OwnMarines, room=Room, ai=true} = State) ->
+    %% Sene from AI
+    io:format("marineoperate from AI~n"),
+
+    case Room#room.pid of
+        undefined ->
+            cmdresponse(Sock, marineoperate, 10),
+            State;
+        RoomPid ->
+            case dict:find(Id, OwnMarines) of
+                {ok, M} ->
+                    NewTargetPosition =
+                    case TargetPosition of
+                        undefined -> M#marine.position;
+                        {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
+                    end,
+                    NewM = M#marine{status=Status, targetposition=NewTargetPosition},
                     gen_server:cast(RoomPid, {broadcast, NewM}),
                     State#state{marine=dict:store(Id, NewM, OwnMarines)};
                 error ->
@@ -243,6 +306,17 @@ marineoperate({marineoperate, Id, Status, {vector2, Cx, Cz}, TargetPosition, Tar
             end
     end.
 
+
+marinereport({marineoperate, Id, _, _, _, _} = MarineReport, 
+    #state{sock=Sock, room=Room, ai=false} = State) ->
+    case Room#room.pid of
+        undefined ->
+            cmdresponse(Sock, marinereport, 10);
+        RoomPid ->
+            {ok, ThisMarineOwnerPid} = gen_server:call(RoomPid, {get_marine_owner_pid, Id}),
+            gen_server:cast(ThisMarineOwnerPid, {marinereport, MarineReport})
+    end,
+    State.
 
 
 cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
