@@ -15,7 +15,7 @@
 
 -include("../include/cb.hrl").
 
--record(state, {sock, roomid, mapx, mapz, ownid=sets:new(), own=dict:new(), others=dict:new()}).
+-record(state, {sdk, mapx, mapz, ownids=sets:new(), own=dict:new(), others=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -47,22 +47,16 @@ start_link(RoomId) ->
 %% @end
 %%--------------------------------------------------------------------
 init([RoomId]) ->
+    {ok, SdkPid} = ai_sdk:start_link(self()),
     IP = {127, 0, 0, 1},
     Port = 8888,
-    {ok, Sock} = gen_tcp:connect(IP, Port,
-            [binary, inet, {reuseaddr, true}, {active, once}, {nodelay, true}, {packet, 4}]),
+
+    {ok, _Sock} = ai_sdk:connect(SdkPid, IP, Port),
 
     %% an ai must join a room before any action,
     %% so It's ok that we do this in init function.
-    JoinroomRequest = api_pb:encode_cmd({cmd, joinroom,
-        undefined,
-        {joinroom, RoomId},
-        undefined,
-        undefined
-        }),
-
-    ok = gen_tcp:send(Sock, JoinroomRequest),
-    {ok, #state{sock=Sock, roomid=RoomId}}.
+    ok = ai_sdk:joinroom(SdkPid, RoomId),
+    {ok, #state{sdk=SdkPid}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -92,8 +86,27 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(_Request, State) ->
-    {noreply, State}.
+handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}}, #state{sdk=Sdk} = State) ->
+    io:format("get joinroomresponse, x = ~p, z = ~p~n", [X, Z]),
+    ok = ai_sdk:createmarine(Sdk, "AiBot", 25, 25),
+    {noreply, State#state{mapx=X, mapz=Z}};
+
+handle_cast({createmarineresponse, MarineId}, #state{ownids=OwnIds} = State) ->
+    io:format("get createmarineresponse, MarineId = ~p~n", [MarineId]),
+    {noreply, State#state{ownids=sets:add_element(MarineId, OwnIds)}};
+
+handle_cast({senceupdate, Marine}, #state{ownids=OwnIds, own=Own, others=Others} = State) ->
+    io:format("get senceupdate~n"),
+    {marine, Id, _, _, HpMax, Hp, {vector2, X, Z}, Status, _} = Marine,
+    NewState =
+    case sets:is_element(Id, OwnIds) of
+        true ->
+            update_own_marine(Id, HpMax, Hp, X, Z, Status, State);
+        false ->
+            other_marine_action(Marine, State)
+    end,
+    {noreply, NewState}.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -106,31 +119,8 @@ handle_cast(_Request, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({tcp, Sock, Data}, State) ->
-    io:format("Got Server Data~n"),
-    Reply =
-    case parse_data(Data, State) of
-        {ok, NewState} ->
-            inet:setopts(Sock, [{active, once}]),
-            {noreply, NewState};
-        error ->
-            {stop, error_code, State}
-    end,
-    Reply;
-
-
-handle_info({tcp_closed, _}, State) ->
-    io:format("tcp closed~n"),
-    {stop, normal, State};
-
-handle_info({tcp_error, _, Reason}, State) ->
-    io:format("tcp error, reason: ~p~n", [Reason]),
-    {stop, Reason, State};
-
-handle_info(timeout, State) ->
-    io:format("timeout..."),
-    {stop, normal, State}.
-
+handle_info(_Info, State) ->
+    {noreply, State}.
 
 
 %%--------------------------------------------------------------------
@@ -145,7 +135,7 @@ handle_info(timeout, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, State) ->
-    gen_tcp:close(State#state.sock),
+    io:format("AI terminate, Reason = ~p~n", [_Reason]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -164,40 +154,31 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 
-parse_data(Data, State) ->
-    {message, MsgType, CmdResponse, SenceUpdate} = api_pb:decode_message(Data),
-    case MsgType of
-        cmdresponse -> cmdresponse(CmdResponse, State);
-        senceupdate -> senceupdate(SenceUpdate, State)
-    end.
+update_own_marine(Id, HpMax, Hp, X, Z, Status, #state{own=Own} = State) ->
+    NewOwn = dict:store(
+        Id,
+        #marine{id=Id, hpmax=HpMax, hp=Hp, position=#vector2{x=X, z=Z}, status=Status},
+        Own
+        ),
 
+    State#state{own=NewOwn}.
 
-cmdresponse({cmdresponse, 0, joinroom, _, {joinroomresponse, _, {vector2int, X, Z}}, _}, State) ->
-    cmd_create_marine(State),
-    {ok, State#state{mapx=X, mapz=Z}};
+other_marine_action(
+    {marine, Id, _, _, HpMax, Hp, {vector2, X, Z}, Status, {vector2, Tx, Tz}},
+    #state{sdk=Sdk, own=Own, others=Others} = State) ->
 
-cmdresponse({cmdresponse, 0, createmarine, _, _, {createmarineresponse, MarineId}}, #state{ownid=OwnId} = State) ->
-    {ok, State#state{ownid=sets:add_element(MarineId, OwnId)}};
+    %% update others first
+    NewOthers = dict:store(
+        Id,
+        #marine{id=Id, hpmax=HpMax, hp=Hp, position=#vector2{x=X, z=Z}, status=Status, targetposition=#vector2{x=Tx, z=Tz}},
+        Others
+        ),
 
-cmdresponse({cmdresponse, 0, marineoperate, _, _, _}, State) ->
-    {ok, State};
+    %% just run to this marine
+    Fun = fun(K, _V) ->
+        ok = ai_sdk:marineoperate(Sdk, K, 'Run', X, Z)
+    end,
 
-cmdresponse({cmdresponse, Ret, Cmd, _, _, _}, _State) ->
-    io:format("Cmd ~p Error, Error Code = ~p~n", [Cmd, Ret]),
-    error.
+    dict:map(Fun, Own),
 
-senceupdate({senceupdate, Marine}, State) ->
-    {ok, State}.
-
-
-
-cmd_create_marine(#state{sock=Sock, roomid=RoomId}) ->
-    Cmd = api_pb:encode_cmd({cmd, createmarine,
-        undefined,
-        undefined,
-        {createmarine, RoomId, "AIbot", {vector2, 10, 30}},
-        undefined
-        }),
-
-    ok = gen_tcp:send(Sock, Cmd),
-    ok.
+    State#state{others=NewOthers}.
