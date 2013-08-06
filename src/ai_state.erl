@@ -1,9 +1,9 @@
--module(ai).
+-module(ai_state).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([start_link/2]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -13,9 +13,7 @@
          terminate/2,
          code_change/3]).
 
--include("../include/cb.hrl").
-
--record(state, {sdk, manager, mapx, mapz, ownids=sets:new(), own=dict:new(), others=dict:new()}).
+-record(state, {worker, id, status, cx, cz, tx, tz}).
 
 %%%===================================================================
 %%% API
@@ -28,8 +26,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(RoomId) ->
-    gen_server:start_link(?MODULE, [RoomId], []).
+start_link(WorkerPid, MarineId) ->
+    gen_server:start_link(?MODULE, [WorkerPid, MarineId], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -46,18 +44,8 @@ start_link(RoomId) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([RoomId]) ->
-    {ok, SdkPid} = ai_sdk:start_link(self()),
-    {ok, StateManagerPid} = ai_state_manager:start_link(),
-    IP = {127, 0, 0, 1},
-    Port = 8888,
-
-    {ok, _Sock} = ai_sdk:connect(SdkPid, IP, Port),
-
-    %% an ai must join a room before any action,
-    %% so It's ok that we do this in init function.
-    ok = ai_sdk:joinroom(SdkPid, RoomId),
-    {ok, #state{sdk=SdkPid, manager=StateManagerPid}}.
+init([WorkerPid, MarineId]) ->
+    {ok, #state{worker=WorkerPid, id=MarineId}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -87,48 +75,9 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}}, #state{sdk=Sdk} = State) ->
-    io:format("get joinroomresponse, x = ~p, z = ~p~n", [X, Z]),
-    ok = ai_sdk:createmarine(Sdk, "AiBot", 25, 25),
-    {noreply, State#state{mapx=X, mapz=Z}};
-
-handle_cast({createmarineresponse, MarineId}, #state{ownids=OwnIds} = State) ->
-    io:format("get createmarineresponse, MarineId = ~p~n", [MarineId]),
-    {noreply, State#state{ownids=sets:add_element(MarineId, OwnIds)}};
-
-handle_cast({senceupdate, Marine}, #state{ownids=OwnIds, own=_Own, others=_Others} = State) ->
-    io:format("get senceupdate~n"),
-    {marine, Id, _, _, HpMax, Hp, {vector2, X, Z}, Status, _} = Marine,
-    NewState =
-    case sets:is_element(Id, OwnIds) of
-        true ->
-            update_own_marine(Id, HpMax, Hp, X, Z, Status, State);
-        false ->
-            other_marine_action(Marine, State)
-    end,
-    {noreply, NewState};
-
-
-handle_cast({ai_state_report, Id, Cx, Cz, Tx, Tz}, #state{own=Own, others=Others} = State) ->
-    io:format("ai_state_report: ~p, ~p ~p, ~p, ~p ~n", [Id, Cx, Cz, Tx, Tz]),
-    Marine =
-    case dict:find(Id, Own) of
-        {ok, M} ->
-            {marine, Id, M#marine.name, M#marine.tag, M#marine.hpmax, M#marine.hp,
-            {vector2, Cx, Cz}, M#marine.status, {vector2, Tx, Tz}
-            };
-        error ->
-            case dict:find(Id, Others) of
-                {ok, M} ->
-                    {marine, Id, M#marine.name, M#marine.tag, M#marine.hpmax, M#marine.hp,
-                    {vector2, Cx, Cz}, M#marine.status, {vector2, Tx, Tz}
-                    };
-                error ->
-                    throw("ai_state_report id not found")
-            end
-    end,
-    gen_server:cast(self(), {senceupdate, Marine}),
-    {noreply, State}.
+handle_cast({ai_state, Id, Status, Cx, Cz, Tx, Tz}, #state{id=Id} = State) ->
+    NewState = State#state{status=Status, cx=Cx, cz=Cz, tx=Tx, tz=Tz},
+    {noreply, NewState, 500}.
 
 
 
@@ -142,10 +91,18 @@ handle_cast({ai_state_report, Id, Cx, Cz, Tx, Tz}, #state{own=Own, others=Others
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-
-handle_info(_Info, State) ->
-    {noreply, State}.
-
+handle_info(timeout, #state{worker=Worker, id=Id, status=Status, cx=Cx, cz=Cz, tx=Tx, tz=Tz} = State) ->
+    %% we only need to calculate this marine's position when he is under 'Run' status.
+    NewState =
+    case Status of
+        'Run' ->
+            {NewX, NewZ} = cal_run_position(2.5, Cx, Cz, Tx, Tz),
+            gen_server:cast(Worker, {ai_state_report, Id, NewX, NewZ, Tx, Tz}),
+            State#state{cx=NewX, cz=NewZ};
+        _ ->
+            State
+    end,
+    {noreply, NewState, 500}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -159,7 +116,6 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-    io:format("AI terminate, Reason = ~p~n", [_Reason]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -178,33 +134,35 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 
-update_own_marine(Id, HpMax, Hp, X, Z, Status, #state{own=Own} = State) ->
-    NewOwn = dict:store(
-        Id,
-        #marine{id=Id, hpmax=HpMax, hp=Hp, position=#vector2{x=X, z=Z}, status=Status},
-        Own
-        ),
 
-    State#state{own=NewOwn}.
+cal_run_position(_Unit, Cx, Cz, Tx, Tz) when Cx =:= Tx, Cz =:= Tz ->
+    {Cx, Cz};
 
-other_marine_action(
-    {marine, Id, _, _, HpMax, Hp, {vector2, X, Z}, Status, {vector2, Tx, Tz}},
-    #state{sdk=Sdk, manager=Mng, own=Own, others=Others} = State) ->
+cal_run_position(Unit, Cx, Cz, Tx, Tz) when Cx =:= Tx ->
+    U =
+    case Tz > Cz of
+        true -> Unit;
+        false -> -Unit
+    end,
+    {Cx, Cz + U};
 
-    %% update others first
-    NewOthers = dict:store(
-        Id,
-        #marine{id=Id, hpmax=HpMax, hp=Hp, position=#vector2{x=X, z=Z}, status=Status, targetposition=#vector2{x=Tx, z=Tz}},
-        Others
-        ),
+cal_run_position(Unit, Cx, Cz, Tx, Tz) when Cz =:= Tz ->
+    U = 
+    case Tx > Cx of
+        true -> Unit;
+        false -> -Unit
+    end,
+    {Cx + U, Cz};
 
-    ai_state_manager:ai_state(Mng, Id, Status, X, Z, Tx, Tz),
-
-    %% just run to this marine
-    Fun = fun(K, _V) ->
-        ok = ai_sdk:marineoperate(Sdk, K, 'Run', X, Z)
+cal_run_position(Unit, Cx, Cz, Tx, Tz) ->
+    U =
+    case Tx > Cx of
+        true -> Unit;
+        false -> -Unit
     end,
 
-    dict:map(Fun, Own),
+    A = math:atan((Tz-Cz) / (Tx - Cx)),
+    X = math:cos(A) * U,
+    Z = math:sin(A) * U,
+    {Cx + X, Cz + Z}.
 
-    State#state{others=NewOthers}.

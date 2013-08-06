@@ -1,9 +1,10 @@
--module(ai).
+-module(ai_state_manager).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([start_link/0,
+         ai_state/7]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -13,9 +14,7 @@
          terminate/2,
          code_change/3]).
 
--include("../include/cb.hrl").
-
--record(state, {sdk, manager, mapx, mapz, ownids=sets:new(), own=dict:new(), others=dict:new()}).
+%% -record(state, {id, pid}).
 
 %%%===================================================================
 %%% API
@@ -28,8 +27,12 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(RoomId) ->
-    gen_server:start_link(?MODULE, [RoomId], []).
+start_link() ->
+    gen_server:start_link(?MODULE, [], []).
+
+ai_state(ManagerPid, Id, Status, Cx, Cz, Tx, Tz) ->
+    gen_server:call(ManagerPid, {ai_state, self(), Id, Status, Cx, Cz, Tx, Tz}).
+
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -46,18 +49,8 @@ start_link(RoomId) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([RoomId]) ->
-    {ok, SdkPid} = ai_sdk:start_link(self()),
-    {ok, StateManagerPid} = ai_state_manager:start_link(),
-    IP = {127, 0, 0, 1},
-    Port = 8888,
-
-    {ok, _Sock} = ai_sdk:connect(SdkPid, IP, Port),
-
-    %% an ai must join a room before any action,
-    %% so It's ok that we do this in init function.
-    ok = ai_sdk:joinroom(SdkPid, RoomId),
-    {ok, #state{sdk=SdkPid, manager=StateManagerPid}}.
+init([]) ->
+    {ok, dict:new()}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -73,9 +66,18 @@ init([RoomId]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+handle_call({ai_state, WorkerPid, Id, Status, Cx, Cz, Tx, Tz}, _From, State) ->
+    NewState =
+    case dict:find(Id, State) of
+        {ok, Pid} ->
+            gen_server:cast(Pid, {ai_state, Id, Status, Cx, Cz, Tx, Tz}),
+            State;
+        error ->
+            {ok, Pid} = ai_state:start_link(WorkerPid, Id),
+            gen_server:cast(Pid, {ai_state, Id, Status, Cx, Cz, Tx, Tz}),
+            dict:store(Id, Pid, State)
+    end,
+    {reply, ok, NewState}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -87,50 +89,8 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}}, #state{sdk=Sdk} = State) ->
-    io:format("get joinroomresponse, x = ~p, z = ~p~n", [X, Z]),
-    ok = ai_sdk:createmarine(Sdk, "AiBot", 25, 25),
-    {noreply, State#state{mapx=X, mapz=Z}};
-
-handle_cast({createmarineresponse, MarineId}, #state{ownids=OwnIds} = State) ->
-    io:format("get createmarineresponse, MarineId = ~p~n", [MarineId]),
-    {noreply, State#state{ownids=sets:add_element(MarineId, OwnIds)}};
-
-handle_cast({senceupdate, Marine}, #state{ownids=OwnIds, own=_Own, others=_Others} = State) ->
-    io:format("get senceupdate~n"),
-    {marine, Id, _, _, HpMax, Hp, {vector2, X, Z}, Status, _} = Marine,
-    NewState =
-    case sets:is_element(Id, OwnIds) of
-        true ->
-            update_own_marine(Id, HpMax, Hp, X, Z, Status, State);
-        false ->
-            other_marine_action(Marine, State)
-    end,
-    {noreply, NewState};
-
-
-handle_cast({ai_state_report, Id, Cx, Cz, Tx, Tz}, #state{own=Own, others=Others} = State) ->
-    io:format("ai_state_report: ~p, ~p ~p, ~p, ~p ~n", [Id, Cx, Cz, Tx, Tz]),
-    Marine =
-    case dict:find(Id, Own) of
-        {ok, M} ->
-            {marine, Id, M#marine.name, M#marine.tag, M#marine.hpmax, M#marine.hp,
-            {vector2, Cx, Cz}, M#marine.status, {vector2, Tx, Tz}
-            };
-        error ->
-            case dict:find(Id, Others) of
-                {ok, M} ->
-                    {marine, Id, M#marine.name, M#marine.tag, M#marine.hpmax, M#marine.hp,
-                    {vector2, Cx, Cz}, M#marine.status, {vector2, Tx, Tz}
-                    };
-                error ->
-                    throw("ai_state_report id not found")
-            end
-    end,
-    gen_server:cast(self(), {senceupdate, Marine}),
+handle_cast(_Msg, State) ->
     {noreply, State}.
-
-
 
 %%--------------------------------------------------------------------
 %% @private
@@ -142,10 +102,8 @@ handle_cast({ai_state_report, Id, Cx, Cz, Tx, Tz}, #state{own=Own, others=Others
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-
 handle_info(_Info, State) ->
     {noreply, State}.
-
 
 %%--------------------------------------------------------------------
 %% @private
@@ -159,7 +117,6 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-    io:format("AI terminate, Reason = ~p~n", [_Reason]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -176,35 +133,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-
-update_own_marine(Id, HpMax, Hp, X, Z, Status, #state{own=Own} = State) ->
-    NewOwn = dict:store(
-        Id,
-        #marine{id=Id, hpmax=HpMax, hp=Hp, position=#vector2{x=X, z=Z}, status=Status},
-        Own
-        ),
-
-    State#state{own=NewOwn}.
-
-other_marine_action(
-    {marine, Id, _, _, HpMax, Hp, {vector2, X, Z}, Status, {vector2, Tx, Tz}},
-    #state{sdk=Sdk, manager=Mng, own=Own, others=Others} = State) ->
-
-    %% update others first
-    NewOthers = dict:store(
-        Id,
-        #marine{id=Id, hpmax=HpMax, hp=Hp, position=#vector2{x=X, z=Z}, status=Status, targetposition=#vector2{x=Tx, z=Tz}},
-        Others
-        ),
-
-    ai_state_manager:ai_state(Mng, Id, Status, X, Z, Tx, Tz),
-
-    %% just run to this marine
-    Fun = fun(K, _V) ->
-        ok = ai_sdk:marineoperate(Sdk, K, 'Run', X, Z)
-    end,
-
-    dict:map(Fun, Own),
-
-    State#state{others=NewOthers}.
