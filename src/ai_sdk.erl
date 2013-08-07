@@ -6,9 +6,8 @@
 -export([start_link/1,
          connect/3,
          joinroom/2,
-         createmarine/4,
+         createmarine/3,
          marineoperate/3,
-         marineoperate/4,
          marineoperate/5]).
 
 %% gen_server callbacks
@@ -42,17 +41,14 @@ connect(Pid, IP, Port) ->
 joinroom(Pid, RoomId) ->
     gen_server:call(Pid, {joinroom, RoomId}).
 
-createmarine(Pid, Name, X, Z) ->
-    gen_server:call(Pid, {createmarine, Name, X, Z}).
+createmarine(Pid, X, Z) ->
+    gen_server:call(Pid, {createmarine, X, Z}).
 
 marineoperate(Pid, MarineId, Status) ->
-    gen_server:call(Pid, {marineoperate, MarineId}).
+    gen_server:call(Pid, {marineoperate, MarineId, Status}).
 
 marineoperate(Pid, MarineId, Status, Tx, Tz) ->
     gen_server:call(Pid, {marineoperate, MarineId, Status, Tx, Tz}).
-
-marineoperate(Pid, MarineId, Status, TargetMarineId) ->
-    gen_server:call(Pid, {marineoperate, MarineId, Status, TargetMarineId}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -103,11 +99,11 @@ handle_call({joinroom, RoomId}, _From, #state{sock=Sock} = State) ->
     {reply, ok, State};
 
 
-handle_call({createmarine, Name, X, Z}, _From, #state{roomid=RoomId, sock=Sock} = State) ->
+handle_call({createmarine, X, Z}, _From, #state{roomid=RoomId, sock=Sock} = State) ->
     Cmd = api_pb:encode_cmd({cmd, createmarine,
         undefined,
         undefined,
-        {createmarine, RoomId, Name, {vector2, X, Z}},
+        {createmarine, RoomId, {vector2, X, Z}},
         undefined
         }),
 
@@ -119,7 +115,7 @@ handle_call({marineoperate, MarineId, Status}, _From, #state{sock=Sock} = State)
         undefined,
         undefined,
         undefined,
-        {marineoperate, MarineId, Status, undefined, undefined, undefined}
+        {marineoperate, MarineId, Status, undefined, undefined}
         }),
     ok = gen_tcp:send(Sock, Cmd),
     {reply, ok, State};
@@ -129,17 +125,7 @@ handle_call({marineoperate, MarineId, Status, Tx, Tz}, _From, #state{sock=Sock} 
         undefined,
         undefined,
         undefined,
-        {marineoperate, MarineId, Status, undefined, {vector2, Tx, Tz}, undefined}
-        }),
-    ok = gen_tcp:send(Sock, Cmd),
-    {reply, ok, State};
-
-handle_call({marineoperate, MarineId, Status, TargetMarineId}, _From, #state{sock=Sock} = State) ->
-    Cmd = api_pb:encode_cmd({cmd, marineoperate,
-        undefined,
-        undefined,
-        undefined,
-        {marineoperate, MarineId, Status, undefined, undefined, TargetMarineId}
+        {marineoperate, MarineId, Status, undefined, {vector2, Tx, Tz}}
         }),
     ok = gen_tcp:send(Sock, Cmd),
     {reply, ok, State}.
@@ -236,7 +222,7 @@ parse_data(Data, State) ->
 
 
 cmdresponse({cmdresponse, 0, joinroom, _, JoinRoomResponse, _}, #state{worker=Worker} = State) ->
-    {joinroomresponse, RoomId, {vector2int, X, Z}} = JoinRoomResponse,
+    {joinroomresponse, RoomId, {vector2int, X, Z}, _} = JoinRoomResponse,
     gen_server:cast(Worker, JoinRoomResponse),
     {ok, State#state{roomid=RoomId, mapx=X, mapz=Z}};
 
@@ -252,5 +238,6 @@ cmdresponse({cmdresponse, Ret, Cmd, _, _, _}, _State) ->
     error.
 
 senceupdate({senceupdate, Marine}, #state{worker=Worker} = State) ->
+    io:format("SenceUpdate, Marine = ~p~n", [Marine]),
     gen_server:cast(Worker, {senceupdate, Marine}),
     {ok, State}.
