@@ -84,15 +84,17 @@ handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
     RoomId = utils:random_int(),
     Token = utils:random_list(),
     {ok, RoomPid} = cb_room_sup:create_room(PlayerPid, RoomId, MapId),
-    {reply, {ok, {RoomId, RoomPid}}, dict:store(RoomId, #room{owner=PlayerPid, pid=RoomPid, token=Token}, State)};
+    {reply, {ok, {RoomId, RoomPid, Token}}, dict:store(RoomId, #room{owner=PlayerPid, pid=RoomPid, token=Token}, State)};
 
 
 handle_call({joinroom, {PlayerPid, RoomId, Token}}, _From, State) ->
     case dict:find(RoomId, State) of
         {ok, #room{pid=RoomPid, token=Token}} ->
+            %% unity3d joinroom
             ok = gen_server:call(RoomPid, {join, PlayerPid}),
             Reply = {ok, {unity3d, RoomId, RoomPid}};
         {ok, #room{pid=RoomPid}} ->
+            %% ai joinroom
             ok = gen_server:call(RoomPid, {join, PlayerPid}),
             Reply = {ok, {ai, RoomId, RoomPid}};
         error ->

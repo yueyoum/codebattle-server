@@ -4,7 +4,8 @@
 
 %% API
 -export([start_link/3,
-         join/1]).
+         all_players/1,
+         marine_action/3]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -32,8 +33,12 @@
 start_link(OwnerPid, RoomId, MapId) ->
     gen_server:start_link(?MODULE, [OwnerPid, RoomId, MapId], []).
 
-join(PlayerPid) ->
-    gen_server:call(self(), {join, PlayerPid}).
+
+all_players(RoomPid) ->
+    gen_server:call(RoomPid, all_players).
+
+marine_action(RoomPid, Marine, Sock) ->
+    gen_server:cast(RoomPid, {marine_action, Marine, Sock, self()}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -71,6 +76,8 @@ init([OwnerPid, RoomId, MapId]) ->
 handle_call({join, PlayerPid}, _From, #state{players=Players} = State) ->
     {reply, ok, State#state{players=[PlayerPid | Players]}};
 
+handle_call(all_players, _From, #state{players=Players} = State) ->
+    {reply, {ok, Players}, State};
 
 handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = State) ->
     Reply = dict:find(MarineId, Marines),
@@ -112,7 +119,22 @@ handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
 
 
 handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) ->
-    {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}}.
+    {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}};
+
+
+handle_cast({marine_action, #marine{status='Flares'} = M, Sock, CallerPid}, #state{players=Players} = State) ->
+    Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- Players] ),
+    io:format("cb_room, 'Flares', ALL Marines = ~p~n", [Marines]),
+    ok = cb_player:notify(Marines, Sock),
+
+    %% notify other players that this marins's state
+    lists:foreach(
+        fun(P) ->
+            gen_server:cast(P, {marineoperate, M})
+        end,
+        lists:delete(CallerPid, Players)
+        ),
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
