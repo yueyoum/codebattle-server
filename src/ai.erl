@@ -140,9 +140,13 @@ handle_call({flares, MarineId}, _From, #state{sdk=Sdk, own=Own} = State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}, _}, #state{sdk=Sdk} = State) ->
-    % ok = ai_sdk:createmarine(Sdk, "AiBot", 25, 25),
-    {noreply, State#state{mapx=X, mapz=Z}};
+handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}, Marines}, State) ->
+    Fun = fun(M, D) ->
+        RM = utils:marine_proto_to_record(M),
+        dict:store(RM#marine.id, RM, D)
+    end,
+    Own = lists:foldl(Fun, dict:new(), Marines),
+    {noreply, State#state{mapx=X, mapz=Z, own=Own}};
 
 handle_cast({createmarineresponse, Marine}, #state{own=Own} = State) ->
     io:format("createmarineresponse, Marine = ~p~n", [Marine]),
@@ -247,9 +251,9 @@ update_others_marine(
     %% ai_state_manager:ai_state(Mng, Id, Status, Cx, Cz, Tx, Tz),
 
     %% just run to this marine
-    Fun = fun(K, _V) ->
-        ok = ai_sdk:marineoperate(Sdk, K, 'Run', Cx, Cz)
-    end,
-    dict:map(Fun, Own),
+    % Fun = fun(K, _V) ->
+    %     ok = ai_sdk:marineoperate(Sdk, K, 'Run', Cx, Cz)
+    % end,
+    % dict:map(Fun, Own),
 
     State#state{others=NewOthers}.

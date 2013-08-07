@@ -85,7 +85,7 @@ handle_call(all_marines, _From, #state{marine=MyMarines} = State) ->
 handle_cast({broadcast, _}, #state{ai=true} = State) ->
     {noreply, State};
 
-handle_cast({broadcast, #marine{}=Marine}, #state{sock=Sock, marine=MyMarines, ai=false} = State) ->
+handle_cast({broadcast, Marine}, #state{sock=Sock, ai=false} = State) ->
     ok = notify(Marine, Sock),
     {noreply, State};
 
@@ -132,7 +132,6 @@ handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
     case Cmd of
         createroom -> createroom(Crm, State);
         marinereport -> marinereport(Opt, State);
-        ready -> ready(State);
         joinroom -> joinroom(Jrm, State);
         createmarine -> createmarine(Cme, State);
         marineoperate -> marineoperate(Opt, State)
@@ -186,9 +185,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-ready(State) ->
-    State.
-
 createroom({createroom, MapId}, #state{sock=Sock, room=Room} = State) ->
     case Room#room.id of
         undefined ->
@@ -205,13 +201,21 @@ joinroom({joinroom, RoomId, Token}, #state{sock=Sock, room=Room} = State) ->
         undefined ->
             case cb_room_manager:joinroom(self(), RoomId, Token) of
                 {ok, {PlayerType, RoomId, RoomPid}} ->
-                    cmdresponse(Sock, {joinroom, {joinroomresponse, RoomId, {vector2int, 50, 50}, []}}),
-                    AI =
+                    {AI, RandomMarines} =
                     case PlayerType of
-                        unity3d -> false;
-                        ai -> true
+                        unity3d -> {false, undefined};
+                        ai -> {true, create_random_marines_record(2, 50, 50)}
                     end,
-                    State#state{room=#room{id=RoomId, pid=RoomPid}, ai=AI};
+                    cmdresponse(Sock, {joinroom, {joinroomresponse, 
+                                                  RoomId,
+                                                  {vector2int, 50, 50},
+                                                  [utils:marine_record_to_proto(M) || M <- RandomMarines]}}),
+
+                    Fun = fun(M, D) -> dict:store(M#marine.id, M, D) end,
+                    MyMarines = lists:foldl(Fun, dict:new(), RandomMarines),
+                    gen_server:cast(RoomPid, {broadcast, RandomMarines}),
+
+                    State#state{marine=MyMarines, room=#room{id=RoomId, pid=RoomPid}, ai=AI};
                 notfound ->
                     cmdresponse(Sock, joinroom, 3),
                     State
@@ -312,12 +316,6 @@ cmdresponse(Sock, {Cmd, Value}) ->
     ok.
 
 
-
-is_own_marine(Id, MyMarines) ->
-    dict:is_key(Id, MyMarines).
-
-
-
 marine_action(_, #marine{status=Status}, _) when Status =:= 'Idle'; Status =:= 'Run'; Status =:= 'Dead' ->
     ok;
 
@@ -336,3 +334,15 @@ notify(Marines, Sock) when is_list(Marines) ->
 
 notify(#marine{} = Marine, Sock) ->
     notify([Marine], Sock).
+
+
+create_random_marines_record(Num, Xmax, Zmax) ->
+    <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
+    random:seed({A, B, C}),
+    [utils:make_new_marine(
+        utils:random_int(),
+        random:uniform(Xmax),
+        random:uniform(Zmax)) || _ <- lists:seq(1, Num)].
+
+create_random_marines_proto(Num, Xmax, Zmax) ->
+    [utils:marine_record_to_proto(M) || M <- create_random_marines_record(Num, Xmax, Zmax)].
