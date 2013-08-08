@@ -5,7 +5,8 @@
 %% API
 -export([start_link/3,
          all_players/1,
-         marine_action/3]).
+         marine_action/3,
+         marine_report/2]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -17,7 +18,7 @@
 
 
 -include("../include/cb.hrl").
--record(state, {roomid, mapid, owner, players=[], marines=dict:new()}).
+-record(state, {roomid, mapid, owner, observers=[], players=[], marines=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -40,6 +41,10 @@ all_players(RoomPid) ->
 marine_action(RoomPid, Marine, Sock) ->
     gen_server:cast(RoomPid, {marine_action, Marine, Sock, self()}).
 
+marine_report(RoomPid, Report) ->
+    gen_server:cast(RoomPid, {marine_report, Report}).
+
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -57,7 +62,7 @@ marine_action(RoomPid, Marine, Sock) ->
 %%--------------------------------------------------------------------
 init([OwnerPid, RoomId, MapId]) ->
     io:format("Create Room: roomid = ~p,  mapid = ~p~n", [RoomId, MapId]),
-    {ok, #state{roomid=RoomId, mapid=MapId, owner=OwnerPid, players=[OwnerPid]}}.
+    {ok, #state{roomid=RoomId, mapid=MapId, owner=OwnerPid, observers=[OwnerPid]}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -73,15 +78,18 @@ init([OwnerPid, RoomId, MapId]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({join, PlayerPid}, _From, #state{players=Players} = State) ->
+handle_call({join, ai, PlayerPid}, _From, #state{players=Players} = State) ->
     {reply, ok, State#state{players=[PlayerPid | Players]}};
 
-handle_call(all_players, _From, #state{players=Players} = State) ->
-    {reply, {ok, Players}, State};
+handle_call({join, ob, PlayerPid}, _From, #state{observers=Observers} = State) ->
+    {reply, ok, State#state{observers=[PlayerPid | Observers]}};
 
-handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = State) ->
-    Reply = dict:find(MarineId, Marines),
-    {reply, Reply, State}.
+handle_call(all_players, _From, #state{players=Players} = State) ->
+    {reply, {ok, Players}, State}.
+
+% handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = State) ->
+%     Reply = dict:find(MarineId, Marines),
+%     {reply, Reply, State}.
 
 
 %%--------------------------------------------------------------------
@@ -94,32 +102,31 @@ handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = S
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({broadcast, Marine}, #state{players=Players} = State) ->
-    io:format("cb_room broadcasting messages, players = ~p~n", [Players]),
-    lists:foreach(
-        fun(PlayerPid) ->
-            gen_server:cast(PlayerPid, {broadcast, Marine})
-        end,
-        Players
-        ),
+handle_cast({to_observer, Marine}, #state{observers=Observers} = State) ->
+    io:format("cb_room to_observer messages, observers = ~p~n", [Observers]),
+    broadcast(Marine, Observers),
     {noreply, State};
 
+
+handle_cast({broadcast, Marine}, #state{players=Players} = State) ->
+    broadcast(Marine, Players),
+    {noreply, State};
 
 handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
-    lists:foreach(
-        fun(PlayerPid) ->
-            case PlayerPid of
-                IgnorePid -> ok;
-                _ -> gen_server:cast(PlayerPid, {broadcast, Marine})
-            end
-        end,
-        Players
-        ),
+    io:format("cb_room broadcasting messages, players = ~p, IgnorePid = ~p~n", [Players, IgnorePid]),
+    broadcast(Marine, lists:delete(IgnorePid, Players)),
     {noreply, State};
 
 
-handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) ->
-    {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}};
+% handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) when is_list(MarineId) ->
+%     Fun = fun(Mid, Ms) ->
+%         dict:store(Mid, PlayerPid, Ms)
+%     end,
+%     NewMarines = lists:foldl(Fun, Marines, MarineId),
+%     {noreply, State#state{marines=NewMarines}};
+
+% handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) ->
+%     {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}};
 
 
 handle_cast({marine_action, #marine{status='Flares'} = M, Sock, CallerPid}, #state{players=Players} = State) ->
@@ -128,13 +135,20 @@ handle_cast({marine_action, #marine{status='Flares'} = M, Sock, CallerPid}, #sta
     ok = cb_player:notify(Marines, Sock),
 
     %% notify other players that this marins's state
-    lists:foreach(
-        fun(P) ->
-            gen_server:cast(P, {marineoperate, M})
-        end,
-        lists:delete(CallerPid, Players)
-        ),
+    broadcast(M, lists:delete(CallerPid, Players)),
+    {noreply, State};
+
+
+handle_cast({marine_action, #marine{status='GunAttack'} = M, _Sock, CallerPid}, #state{players=Players} = State) ->
+    %% other players know this marine's state
+    broadcast(M, lists:delete(CallerPid, Players)),
+    {noreply, State};
+
+
+handle_cast({marine_report, Report}, #state{players=Players} = State) ->
+    report(Report, Players),
     {noreply, State}.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -177,3 +191,18 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+report(Data, Players) ->
+    broadcast(Data, Players, report).
+
+broadcast(Marine, Players) ->
+    broadcast(Marine, Players, broadcast).
+
+broadcast(Data, Players, MessageType) ->
+    lists:foreach(
+        fun(PlayerPid) ->
+            gen_server:cast(PlayerPid, {MessageType, Data})
+        end,
+        Players
+        ),
+    ok.

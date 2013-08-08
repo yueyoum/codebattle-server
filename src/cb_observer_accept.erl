@@ -1,13 +1,9 @@
--module(cb_room_manager).
+-module(cb_observer_accept).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/0,
-         createroom/2,
-         joinroom/2,
-         joinroom/3,
-         broadcast/2]).
+-export([start_link/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -17,10 +13,7 @@
          terminate/2,
          code_change/3]).
 
-
--include("../include/cb.hrl").
-
--record(room, {owner, pid, token}).
+%% -record(state, {sock}).
 
 %%%===================================================================
 %%% API
@@ -34,24 +27,8 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-
-createroom(PlayerPid, MapId) ->
-    gen_server:call(?MODULE, {createroom, {PlayerPid, MapId}}).
-
-
-joinroom(PlayerPid, RoomId) ->
-    joinroom(PlayerPid, RoomId, undefined).
-
-joinroom(PlayerPid, RoomId, Token) ->
-    gen_server:call(?MODULE, {joinroom, {PlayerPid, RoomId, Token}}).
-
-
-
-broadcast(RoomId, #marine{} = Marine) ->
-    gen_server:call(?MODULE, {broadcast, {RoomId, Marine}}).
-
-
+    Port = application:get_env(codebattle, obport, 8887),
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [Port], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -68,8 +45,13 @@ broadcast(RoomId, #marine{} = Marine) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
-    {ok, dict:new()}.
+init([Port]) ->
+    {ok, Sock} = gen_tcp:listen(Port,[
+                binary, {reuseaddr, true}, {active, once}, {nodelay, true},
+                {ip, {0,0,0,0}}, inet,  {packet, 4}
+                ]),
+    gen_server:cast(self(), accept),
+    {ok, Sock}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -85,32 +67,9 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
-    RoomId = utils:random_int(),
-    Token = utils:random_list(),
-    {ok, RoomPid} = cb_room_sup:create_room(PlayerPid, RoomId, MapId),
-    {reply, {ok, {RoomId, RoomPid, Token}}, dict:store(RoomId, #room{owner=PlayerPid, pid=RoomPid, token=Token}, State)};
-
-
-handle_call({joinroom, {PlayerPid, RoomId, Token}}, _From, State) ->
-    case dict:find(RoomId, State) of
-        {ok, #room{pid=RoomPid, token=Token}} ->
-            ok = gen_server:call(RoomPid, {join, ob, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
-        {ok, #room{pid=RoomPid}} ->
-            ok = gen_server:call(RoomPid, {join, ai, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
-        error ->
-            Reply = notfound
-    end,
-    {reply, Reply, State};
-
-
-handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
-    {ok, #room{pid=RoomPid}} = dict:find(RoomId, State),
-    gen_server:cast(RoomPid, {broadcast, Marine}),
-    {reply, ok, State}.
-
+handle_call(_Request, _From, State) ->
+    Reply = ok,
+    {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -122,8 +81,12 @@ handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(_Msg, State) ->
-    {noreply, State}.
+handle_cast(accept, Sock) ->
+    {ok, Client} = gen_tcp:accept(Sock),
+    {ok, Pid} = cb_observer_sup:create_observer(Client),
+    gen_tcp:controlling_process(Client, Pid),
+    gen_server:cast(self(), accept),
+    {noreply, Sock}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -149,7 +112,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, Sock) ->
+    gen_tcp:close(Sock),
     ok.
 
 %%--------------------------------------------------------------------

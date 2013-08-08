@@ -6,7 +6,6 @@
 -export([start_link/1,
          connect/3,
          joinroom/2,
-         createmarine/3,
          marineoperate/3,
          marineoperate/5]).
 
@@ -40,9 +39,6 @@ connect(Pid, IP, Port) ->
 
 joinroom(Pid, RoomId) ->
     gen_server:call(Pid, {joinroom, RoomId}).
-
-createmarine(Pid, X, Z) ->
-    gen_server:call(Pid, {createmarine, X, Z}).
 
 marineoperate(Pid, MarineId, Status) ->
     gen_server:call(Pid, {marineoperate, MarineId, Status}).
@@ -90,8 +86,7 @@ handle_call({connect, IP, Port}, _From, State) ->
 
 handle_call({joinroom, RoomId}, _From, #state{sock=Sock} = State) ->
     JoinroomRequest = api_pb:encode_cmd({cmd, joinroom,
-        undefined,
-        {joinroom, RoomId, undefined},
+        {joinroom, RoomId},
         undefined,
         undefined
         }),
@@ -99,23 +94,11 @@ handle_call({joinroom, RoomId}, _From, #state{sock=Sock} = State) ->
     {reply, ok, State};
 
 
-handle_call({createmarine, X, Z}, _From, #state{roomid=RoomId, sock=Sock} = State) ->
-    Cmd = api_pb:encode_cmd({cmd, createmarine,
-        undefined,
-        undefined,
-        {createmarine, RoomId, {vector2, X, Z}},
-        undefined
-        }),
-
-    ok = gen_tcp:send(Sock, Cmd),
-    {reply, ok, State};
-
 handle_call({marineoperate, MarineId, Status}, _From, #state{sock=Sock} = State) ->
     Cmd = api_pb:encode_cmd({cmd, marineoperate,
         undefined,
         undefined,
-        undefined,
-        {marineoperate, MarineId, Status, undefined, undefined}
+        {marineoperate, MarineId, Status, undefined}
         }),
     ok = gen_tcp:send(Sock, Cmd),
     {reply, ok, State};
@@ -124,8 +107,7 @@ handle_call({marineoperate, MarineId, Status, Tx, Tz}, _From, #state{sock=Sock} 
     Cmd = api_pb:encode_cmd({cmd, marineoperate,
         undefined,
         undefined,
-        undefined,
-        {marineoperate, MarineId, Status, undefined, {vector2, Tx, Tz}}
+        {marineoperate, MarineId, Status, {vector2, Tx, Tz}}
         }),
     ok = gen_tcp:send(Sock, Cmd),
     {reply, ok, State}.
@@ -221,16 +203,12 @@ parse_data(Data, State) ->
     end.
 
 
-cmdresponse({cmdresponse, 0, joinroom, _, JoinRoomResponse, _}, #state{worker=Worker} = State) ->
+cmdresponse({cmdresponse, 0, joinroom, JoinRoomResponse, _}, #state{worker=Worker} = State) ->
     {joinroomresponse, RoomId, {vector2int, X, Z}, _} = JoinRoomResponse,
     gen_server:cast(Worker, JoinRoomResponse),
     {ok, State#state{roomid=RoomId, mapx=X, mapz=Z}};
 
-cmdresponse({cmdresponse, 0, createmarine, _, _, CreateMarineResponse}, #state{worker=Worker} = State) ->
-    gen_server:cast(Worker, CreateMarineResponse),
-    {ok, State};
-
-cmdresponse({cmdresponse, 0, marineoperate, _, _, _}, State) ->
+cmdresponse({cmdresponse, 0, marineoperate, _, _}, State) ->
     {ok, State};
 
 cmdresponse({cmdresponse, Ret, Cmd, _, _, _}, _State) ->

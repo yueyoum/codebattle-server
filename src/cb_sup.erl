@@ -21,6 +21,16 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
+    ObAcceptServer = {
+            cb_observer_accept, {cb_observer_accept, start_link, []},
+            permanent, 2000, worker, [cb_observer_accept]
+            },
+
+    ObSuperviosr = {
+            cb_observer_sup, {cb_observer_sup, start_link, []},
+            permanent, infinity, supervisor, [cb_observer_sup]
+            },
+
     AcceptServer = {
             cb_accept, {cb_accept, start_link, []},
             permanent, 2000, worker, [cb_accept]
@@ -42,5 +52,5 @@ init([]) ->
             },
 
     Restart = {one_for_one, 5, 10},
-    {ok, {Restart, [RoomManager, RoomSupervisor, PlayerSupervisor, AcceptServer]}}.
+    {ok, {Restart, [RoomManager, RoomSupervisor, ObSuperviosr, ObAcceptServer, PlayerSupervisor, AcceptServer]}}.
 

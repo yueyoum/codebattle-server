@@ -17,7 +17,7 @@
 -include("../include/cb.hrl").
 
 -record(room, {id, pid}).
--record(state, {sock, marine=dict:new(), room=#room{}, ai=true}).
+-record(state, {sock, marine=dict:new(), room=#room{}}).
 -define(TIMEOUT, 1000 * 600).
 
 %%%===================================================================
@@ -82,35 +82,69 @@ handle_call(all_marines, _From, #state{marine=MyMarines} = State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({broadcast, _}, #state{ai=true} = State) ->
-    {noreply, State};
 
-handle_cast({broadcast, Marine}, #state{sock=Sock, ai=false} = State) ->
+handle_cast({broadcast, Marine}, #state{sock=Sock} = State) ->
     ok = notify(Marine, Sock),
     {noreply, State};
 
 
-handle_cast({marineoperate, Marine}, #state{sock=Sock} = State) ->
-    ok = notify(Marine, Sock),
-    {noreply, State};
+handle_cast({report, 
+    {marinereport,
+     toidle,
+     {marinestatus, Id, 'Idle', {vector2, X, Z}},
+     undefined,
+     undefined}},
+     #state{sock=Sock, marine=MyMarines} = State) ->
 
-
-handle_cast({marinereport, {marineoperate, Id, Status, {vector2, Cx, Cz}, Tp, _Tm}},
-    #state{sock=Sock, marine=MyMarines, room=Room} = State) ->
-    M = dict:fetch(Id, MyMarines),
-
-    NewTp =
-    case Tp of
-        undefined -> M#marine.position;
-        {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
+    NewState =
+    case dict:is_key(Id, MyMarines) of
+        false -> 
+            State;
+        true ->
+            M = dict:fetch(Id, MyMarines),
+            NewM = M#marine{position=#vector2{x=X, z=Z}, status='Idle'},
+            ok = notify(NewM, Sock),
+            State#state{marine=dict:store(Id, NewM, MyMarines)}
     end,
-    NewM = M#marine{position=#vector2{x=Cx, z=Cz}, status=Status, targetposition=NewTp},
-
-    gen_server:cast(Room#room.pid, {broadcast, NewM}),
-    {noreply, State#state{marine=dict:store(Id, NewM, MyMarines)}}.
+    {noreply, NewState};
 
 
+handle_cast({report,
+    {marinereport,
+     damage,
+     undefined,
+     {marinestatus, Id1, Status1, {vector2, X1, Z1}},
+     {marinestatus, Id2, Status2, {vector2, X2, Z2}}}},
+     #state{sock=Sock, marine=MyMarines, room=Room} = State) ->
 
+    NewState =
+    case dict:is_key(Id2, MyMarines) of
+        false ->
+            case dict:is_key(Id1, MyMarines) of
+                false ->
+                    State;
+                true ->
+                    M = dict:fetch(Id1, MyMarines),
+                    NewM = M#marine{position=#vector2{x=X1, z=Z1}},
+                    gen_server:cast(Room#room.pid, {broadcast, NewM}),
+                    State#state{marine = dict:store(Id1, NewM, MyMarines)}
+            end;
+        true ->
+            M = dict:fetch(Id2, MyMarines),
+            Hp = M#marine.hp - 20,
+            NewM = 
+            case Hp > 0 of
+                true ->
+                    M#marine{position=#vector2{x=X2, z=Z2}, hp=Hp};
+                false ->
+                    M#marine{position=#vector2{x=X2, z=Z2}, hp=0, status='Dead'}
+            end,
+
+            gen_server:cast(Room#room.pid, {broadcast, NewM}),
+            gen_server:cast(Room#room.pid, {to_observer, NewM}),
+            State#state{marine = dict:store(Id2, NewM, MyMarines)}
+    end,
+    {noreply, NewState}.
 
 
 %%--------------------------------------------------------------------
@@ -125,13 +159,11 @@ handle_cast({marinereport, {marineoperate, Id, Status, {vector2, Cx, Cz}, Tp, _T
 %%--------------------------------------------------------------------
 
 handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
-    {cmd, Cmd, Crm, Jrm, Cme, Opt} = api_pb:decode_cmd(Data),
-    io:format("Player receive: ~p, ~p, ~p, ~p, ~p~n", [Cmd, Crm, Jrm, Cme, Opt]),
+    {cmd, Cmd, Jrm, Cme, Opt} = api_pb:decode_cmd(Data),
+    io:format("Player receive: ~p, ~p, ~p, ~p~n", [Cmd, Jrm, Cme, Opt]),
 
     NewState =
     case Cmd of
-        createroom -> createroom(Crm, State);
-        marinereport -> marinereport(Opt, State);
         joinroom -> joinroom(Jrm, State);
         createmarine -> createmarine(Cme, State);
         marineoperate -> marineoperate(Opt, State)
@@ -185,27 +217,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-createroom({createroom, MapId}, #state{sock=Sock, room=Room} = State) ->
+joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
     case Room#room.id of
         undefined ->
-            {ok, {RoomId, RoomPid, Token}} = cb_room_manager:createroom(self(), MapId),
-            cmdresponse(Sock, {createroom, {createroomresponse, RoomId, Token, {vector2int, 50, 50}}}),
-            State#state{room=#room{id=RoomId, pid=RoomPid}, ai=false};
-        _ ->
-            cmdresponse(Sock, createroom, 1),
-            State
-    end.
-
-joinroom({joinroom, RoomId, Token}, #state{sock=Sock, room=Room} = State) ->
-    case Room#room.id of
-        undefined ->
-            case cb_room_manager:joinroom(self(), RoomId, Token) of
-                {ok, {PlayerType, RoomId, RoomPid}} ->
-                    {AI, RandomMarines} =
-                    case PlayerType of
-                        unity3d -> {false, undefined};
-                        ai -> {true, create_random_marines_record(2, 50, 50)}
-                    end,
+            case cb_room_manager:joinroom(self(), RoomId) of
+                {ok, {RoomId, RoomPid}} ->
+                    RandomMarines = create_random_marines_record(2, 50, 50),
                     cmdresponse(Sock, {joinroom, {joinroomresponse, 
                                                   RoomId,
                                                   {vector2int, 50, 50},
@@ -213,9 +230,10 @@ joinroom({joinroom, RoomId, Token}, #state{sock=Sock, room=Room} = State) ->
 
                     Fun = fun(M, D) -> dict:store(M#marine.id, M, D) end,
                     MyMarines = lists:foldl(Fun, dict:new(), RandomMarines),
-                    gen_server:cast(RoomPid, {broadcast, RandomMarines}),
+                    % gen_server:cast(RoomPid, {new_marine, dict:fetch_keys(MyMarines), self()}),
+                    gen_server:cast(RoomPid, {to_observer, RandomMarines}),
 
-                    State#state{marine=MyMarines, room=#room{id=RoomId, pid=RoomPid}, ai=AI};
+                    State#state{marine=MyMarines, room=#room{id=RoomId, pid=RoomPid}};
                 notfound ->
                     cmdresponse(Sock, joinroom, 3),
                     State
@@ -227,26 +245,13 @@ joinroom({joinroom, RoomId, Token}, #state{sock=Sock, room=Room} = State) ->
 
 
 
-createmarine({createmarine, RoomId, {vector2, X, Z}}, #state{sock=Sock, marine=OwnMarines, room=Room, ai=true} = State) ->
-    case Room#room.id of
-        undefined ->
-            cmdresponse(Sock, createmarine, 5),
-            State;
-        RoomId ->
-            MarineId = utils:random_int(),
-            Marine = utils:make_new_marine(MarineId, X, Z),
-            cmdresponse(Sock, {createmarine, {createmarineresponse, utils:marine_record_to_proto(Marine)}}),
-            % gen_server:cast(Room#room.pid, {new_marine, MarineId, self()}),
-            gen_server:cast(Room#room.pid, {broadcast, Marine}),
-            State#state{marine=dict:store(MarineId, Marine, OwnMarines)};
-        _ ->
-            cmdresponse(Sock, createmarine, 6),
-            State
-    end.
+createmarine(_, State) ->
+    io:format("cb_player, createmarine not supported!~n"),
+    State.
 
 
-marineoperate({marineoperate, Id, Status, undefined, TargetPosition},
-    #state{sock=Sock, marine=OwnMarines, room=Room, ai=true} = State) ->
+marineoperate({marineoperate, Id, Status, TargetPosition},
+    #state{sock=Sock, marine=OwnMarines, room=Room} = State) ->
     case Room#room.pid of
         undefined ->
             cmdresponse(Sock, marineoperate, 10),
@@ -260,7 +265,7 @@ marineoperate({marineoperate, Id, Status, undefined, TargetPosition},
                         {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
                     end,
                     NewM = M#marine{status=Status, targetposition=NewTargetPosition},
-                    gen_server:cast(RoomPid, {broadcast, NewM}),
+                    gen_server:cast(RoomPid, {to_observer, NewM}),
                     marine_action(RoomPid, NewM, Sock),
                     State#state{marine=dict:store(Id, NewM, OwnMarines)};
                 error ->
@@ -270,22 +275,10 @@ marineoperate({marineoperate, Id, Status, undefined, TargetPosition},
     end.
 
 
-marinereport({marineoperate, Id, _, _, _, _} = MarineReport, 
-    #state{sock=Sock, room=Room, ai=false} = State) ->
-    case Room#room.pid of
-        undefined ->
-            cmdresponse(Sock, marinereport, 10);
-        RoomPid ->
-            {ok, ThisMarineOwnerPid} = gen_server:call(RoomPid, {get_marine_owner_pid, Id}),
-            gen_server:cast(ThisMarineOwnerPid, {marinereport, MarineReport})
-    end,
-    State.
-
-
 cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
     Msg = api_pb:encode_message({message,
         cmdresponse,
-        {cmdresponse, RetCode, Cmd, undefined, undefined, undefined},
+        {cmdresponse, RetCode, Cmd, undefined, undefined},
         undefined}),
     ok = gen_tcp:send(Sock, Msg),
     ok.
@@ -293,22 +286,10 @@ cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
 cmdresponse(Sock, {Cmd, Value}) ->
     Msg =
     case Cmd of
-        createroom ->
-            api_pb:encode_message({message,
-                cmdresponse,
-                {cmdresponse, 0, Cmd, Value, undefined, undefined},
-                undefined
-                });
         joinroom ->
             api_pb:encode_message({message,
                 cmdresponse,
-                {cmdresponse, 0, Cmd, undefined, Value, undefined},
-                undefined
-                });
-        createmarine ->
-            api_pb:encode_message({message,
-                cmdresponse,
-                {cmdresponse, 0, Cmd, undefined, undefined, Value},
+                {cmdresponse, 0, Cmd, Value, undefined},
                 undefined
                 })
     end,

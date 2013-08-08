@@ -1,13 +1,10 @@
--module(cb_room_manager).
+-module(cb_observer).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/0,
-         createroom/2,
-         joinroom/2,
-         joinroom/3,
-         broadcast/2]).
+-export([start_link/1,
+         notify/2]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -17,10 +14,11 @@
          terminate/2,
          code_change/3]).
 
-
 -include("../include/cb.hrl").
 
--record(room, {owner, pid, token}).
+-record(room, {id, pid}).
+-record(state, {sock, room=#room{}}).
+-define(TIMEOUT, 1000 * 600).
 
 %%%===================================================================
 %%% API
@@ -33,24 +31,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-
-createroom(PlayerPid, MapId) ->
-    gen_server:call(?MODULE, {createroom, {PlayerPid, MapId}}).
-
-
-joinroom(PlayerPid, RoomId) ->
-    joinroom(PlayerPid, RoomId, undefined).
-
-joinroom(PlayerPid, RoomId, Token) ->
-    gen_server:call(?MODULE, {joinroom, {PlayerPid, RoomId, Token}}).
-
-
-
-broadcast(RoomId, #marine{} = Marine) ->
-    gen_server:call(?MODULE, {broadcast, {RoomId, Marine}}).
-
+start_link(Socket) ->
+    gen_server:start_link(?MODULE, [Socket], []).
 
 
 %%%===================================================================
@@ -68,8 +50,9 @@ broadcast(RoomId, #marine{} = Marine) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
-    {ok, dict:new()}.
+init([Socket]) ->
+    io:format("cb_observer: New Observer~n"),
+    {ok, #state{sock=Socket}, ?TIMEOUT}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -85,32 +68,8 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
-    RoomId = utils:random_int(),
-    Token = utils:random_list(),
-    {ok, RoomPid} = cb_room_sup:create_room(PlayerPid, RoomId, MapId),
-    {reply, {ok, {RoomId, RoomPid, Token}}, dict:store(RoomId, #room{owner=PlayerPid, pid=RoomPid, token=Token}, State)};
-
-
-handle_call({joinroom, {PlayerPid, RoomId, Token}}, _From, State) ->
-    case dict:find(RoomId, State) of
-        {ok, #room{pid=RoomPid, token=Token}} ->
-            ok = gen_server:call(RoomPid, {join, ob, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
-        {ok, #room{pid=RoomPid}} ->
-            ok = gen_server:call(RoomPid, {join, ai, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
-        error ->
-            Reply = notfound
-    end,
-    {reply, Reply, State};
-
-
-handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
-    {ok, #room{pid=RoomPid}} = dict:find(RoomId, State),
-    gen_server:cast(RoomPid, {broadcast, Marine}),
+handle_call(_Request, _From, State) ->
     {reply, ok, State}.
-
 
 %%--------------------------------------------------------------------
 %% @private
@@ -122,8 +81,12 @@ handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(_Msg, State) ->
+
+handle_cast({broadcast, Marine}, #state{sock=Sock} = State) ->
+    ok = notify(Marine, Sock),
     {noreply, State}.
+
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -135,8 +98,35 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(_Info, State) ->
-    {noreply, State}.
+
+handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
+    {cmd, Cmd, Crm, Jrm, Mrt} = observer_pb:decode_cmd(Data),
+    io:format("Observer receive: ~p, ~p, ~p, ~p~n", [Cmd, Crm, Jrm, Mrt]),
+
+    NewState =
+    case Cmd of
+        createroom -> createroom(Crm, State);
+        joinroom -> joinroom(Jrm, State);
+        marinereport -> marinereport(Mrt, State)
+    end,
+
+    inet:setopts(Sock, [{active, once}]),
+    {noreply, NewState, ?TIMEOUT};
+
+
+handle_info({tcp_closed, _}, State) ->
+    io:format("tcp closed~n"),
+    {stop, normal, State};
+
+handle_info({tcp_error, _, Reason}, State) ->
+    io:format("tcp error, reason: ~p~n", [Reason]),
+    {stop, Reason, State};
+
+handle_info(timeout, State) ->
+    io:format("timeout..."),
+    {stop, normal, State}.
+
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -149,7 +139,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    gen_tcp:close(State#state.sock),
     ok.
 
 %%--------------------------------------------------------------------
@@ -166,3 +157,72 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+createroom({createroom, MapId}, #state{sock=Sock, room=Room} = State) ->
+    case Room#room.id of
+        undefined ->
+            {ok, {RoomId, RoomPid, _Token}} = cb_room_manager:createroom(self(), MapId),
+            cmdresponse(Sock, {createroom, {createroomresponse, RoomId, {vector2int, 50, 50}}}),
+            State#state{room=#room{id=RoomId, pid=RoomPid}};
+        _ ->
+            cmdresponse(Sock, createroom, 1),
+            State
+    end.
+
+joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
+    io:format("Observer joinroom NOT implemented!~n"),
+    State.
+
+
+marinereport(Report, #state{room=Room} = State) ->
+    case Room#room.pid of
+        undefined ->
+            ok;
+        RoomPid ->
+            cb_room:marine_report(RoomPid, Report)
+    end,
+    State.
+
+
+
+cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
+    Msg = observer_pb:encode_message({message,
+        cmdresponse,
+        {cmdresponse, RetCode, Cmd, undefined, undefined},
+        undefined}),
+    ok = gen_tcp:send(Sock, Msg),
+    ok.
+
+cmdresponse(Sock, {Cmd, Value}) ->
+    Msg =
+    case Cmd of
+        createroom ->
+            observer_pb:encode_message({message,
+                cmdresponse,
+                {cmdresponse, 0, Cmd, Value, undefined},
+                undefined
+                });
+        joinroom ->
+            observer_pb:encode_message({message,
+                cmdresponse,
+                {cmdresponse, 0, Cmd, undefined, Value},
+                undefined
+                })
+    end,
+    ok = gen_tcp:send(Sock, Msg),
+    ok.
+
+
+
+notify(Marines, Sock) when is_list(Marines) ->
+    Data = [utils:marine_record_to_proto(M) || M <- Marines],
+    Msg = observer_pb:encode_message({message, senceupdate,
+        undefined,
+        {senceupdate, Data}
+        }),
+    ok = gen_tcp:send(Sock, Msg),
+    ok;
+
+notify(#marine{} = Marine, Sock) ->
+    notify([Marine], Sock).
+
