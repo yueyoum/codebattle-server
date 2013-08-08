@@ -199,7 +199,8 @@ parse_data(Data, State) ->
     {message, MsgType, CmdResponse, SenceUpdate} = api_pb:decode_message(Data),
     case MsgType of
         cmdresponse -> cmdresponse(CmdResponse, State);
-        senceupdate -> senceupdate(SenceUpdate, State)
+        senceupdate -> senceupdate(SenceUpdate, State);
+        startbattle -> startbattle(State)
     end.
 
 
@@ -218,4 +219,9 @@ cmdresponse({cmdresponse, Ret, Cmd, _, _, _}, _State) ->
 senceupdate({senceupdate, Marine}, #state{worker=Worker} = State) ->
     io:format("SenceUpdate, Marine = ~p~n", [Marine]),
     gen_server:cast(Worker, {senceupdate, Marine}),
+    {ok, State}.
+
+startbattle(#state{worker=Worker} = State) ->
+    io:format("startbattle!~n"),
+    gen_server:cast(Worker, startbattle),
     {ok, State}.

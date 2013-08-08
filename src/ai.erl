@@ -4,11 +4,11 @@
 
 %% API
 -export([start_link/1,
-         createmarine/3,
          own_marine_ids/1,
          other_marine_ids/1,
          move/4,
-         flares/2]).
+         flares/2,
+         gunshoot/4]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -20,7 +20,9 @@
 
 -include("../include/cb.hrl").
 
--record(state, {sdk, manager, mapx, mapz, own=dict:new(), others=dict:new()}).
+-define(TIMEOUT, 1000 * 10).
+
+-record(state, {sdk, manager, mapx, mapz, started=false, own=dict:new(), others=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -36,10 +38,6 @@
 start_link(RoomId) ->
     gen_server:start_link(?MODULE, [RoomId], []).
 
-
-createmarine(Pid, X, Z) ->
-    gen_server:call(Pid, {createmarine, X, Z}).
-
 own_marine_ids(Pid) ->
     gen_server:call(Pid, own_marine_ids).
 
@@ -52,6 +50,8 @@ move(Pid, MarineId, X, Z) ->
 flares(Pid, MarineId) ->
     gen_server:call(Pid, {flares, MarineId}).
 
+gunshoot(Pid, MarineId, X, Z) ->
+    gen_server:call(Pid, {gunshoot, MarineId, X, Z}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -69,6 +69,8 @@ flares(Pid, MarineId) ->
 %% @end
 %%--------------------------------------------------------------------
 init([RoomId]) ->
+    <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
+    random:seed({A, B, C}),
     {ok, SdkPid} = ai_sdk:start_link(self()),
     % {ok, StateManagerPid} = ai_state_manager:start_link(),
     IP = {127, 0, 0, 1},
@@ -127,6 +129,16 @@ handle_call({flares, MarineId}, _From, #state{sdk=Sdk, own=Own} = State) ->
         false ->
             not_found_this_marine
     end,
+    {reply, Reply, State};
+
+handle_call({gunshoot, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
+    Reply = 
+    case dict:is_key(MarineId, Own) of
+        true ->
+            ai_sdk:marineoperate(Sdk, MarineId, 'GunAttack', X, Z);
+        false ->
+            not_found_this_marine
+    end,
     {reply, Reply, State}.
 
 
@@ -156,8 +168,10 @@ handle_cast({createmarineresponse, Marine}, #state{own=Own} = State) ->
 handle_cast({senceupdate, Marine}, State) when is_list(Marine) ->
     Fun = fun(M, S) -> update_marine(M, S) end,
     NewState = lists:foldl(Fun, State, Marine),
-    {noreply, NewState}.
+    {noreply, NewState};
 
+handle_cast(startbattle, State) ->
+    {noreply, State#state{started=true}}.
 
 % handle_cast({ai_state_report, Id, Cx, Cz, Tx, Tz}, #state{own=Own, others=Others} = State) ->
 %     io:format("ai_state_report: ~p, ~p ~p, ~p, ~p ~n", [Id, Cx, Cz, Tx, Tz]),
@@ -238,22 +252,22 @@ update_marine({marine, Id, _, _, _, _} = M, #state{own=Own} = State) ->
 
 
 
-update_own_marine({marine, Id, _, _, _, _} = M, #state{own=Own} = State) ->
+update_own_marine({marine, Id, Hp, _, _, _} = M, #state{own=Own} = State) ->
+    Marine = dict:fetch(Id, Own),
+    case Marine#marine.hp > Hp of
+        true ->
+            io:format("Marine ~p UnderAttack~n", [Id]);
+        false ->
+            ok
+    end,
     NewOwn = dict:store(Id, utils:marine_proto_to_record(M), Own),
     State#state{own=NewOwn}.
 
 
 update_others_marine(
-    {marine, Id, Hp, {vector2, Cx, Cz}, Status, {vector2, Tx, Tz}} = Marine,
-    #state{sdk=Sdk, own=Own, others=Others} = State) ->
+    {marine, Id, Hp, {vector2, Cx, Cz}, Status, _} = Marine,
+    #state{sdk=Sdk, own=Own, others=Others, started=Started} = State) ->
 
     NewOthers = dict:store(Id, utils:marine_proto_to_record(Marine), Others),
-    %% ai_state_manager:ai_state(Mng, Id, Status, Cx, Cz, Tx, Tz),
-
-    %% just run to this marine
-    % Fun = fun(K, _V) ->
-    %     ok = ai_sdk:marineoperate(Sdk, K, 'Run', Cx, Cz)
-    % end,
-    % dict:map(Fun, Own),
 
     State#state{others=NewOthers}.

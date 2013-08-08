@@ -79,7 +79,27 @@ init([OwnerPid, RoomId, MapId]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({join, ai, PlayerPid}, _From, #state{players=Players} = State) ->
-    {reply, ok, State#state{players=[PlayerPid | Players]}};
+    Limit = 2,
+    NewPlayers =
+    case length(Players) - (Limit - 1) of
+        N when N =:= 0 ->
+            %% send startbattle message
+            Ps = [PlayerPid | Players],
+            lists:foreach(
+                fun(P) ->
+                    gen_server:cast(P, startbattle)
+                end,
+                Ps
+                ),
+            Ps;
+        N when N < 0 ->
+            [PlayerPid | Players];
+        N when N > 0 ->
+            %% room full
+            io:format("cannot join room, full~n"),
+            Players
+    end,
+    {reply, ok, State#state{players=NewPlayers}};
 
 handle_call({join, ob, PlayerPid}, _From, #state{observers=Observers} = State) ->
     {reply, ok, State#state{observers=[PlayerPid | Observers]}};

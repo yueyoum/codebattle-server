@@ -144,7 +144,14 @@ handle_cast({report,
             gen_server:cast(Room#room.pid, {to_observer, NewM}),
             State#state{marine = dict:store(Id2, NewM, MyMarines)}
     end,
-    {noreply, NewState}.
+    {noreply, NewState};
+
+
+handle_cast(startbattle, #state{sock=Sock} = State) ->
+    Msg = api_pb:encode_message({message, startbattle, undefined, undefined}),
+    ok = gen_tcp:send(Sock, Msg),
+    {noreply, State}.
+
 
 
 %%--------------------------------------------------------------------
