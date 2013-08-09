@@ -212,12 +212,12 @@ cmdresponse({cmdresponse, 0, joinroom, JoinRoomResponse, _}, #state{worker=Worke
 cmdresponse({cmdresponse, 0, marineoperate, _, _}, State) ->
     {ok, State};
 
-cmdresponse({cmdresponse, Ret, Cmd, _, _, _}, _State) ->
+cmdresponse({cmdresponse, Ret, Cmd, _, _}, State) ->
     io:format("Cmd ~p Error, Error Code = ~p~n", [Cmd, Ret]),
-    error.
+    {ok, State}.
 
 senceupdate({senceupdate, Marine}, #state{worker=Worker} = State) ->
-    io:format("SenceUpdate, Marine = ~p~n", [Marine]),
+    io:format("SenceUpdate, at ~p, Marine = ~p~n", [calendar:now_to_datetime(now()), Marine]),
     gen_server:cast(Worker, {senceupdate, Marine}),
     {ok, State}.
 

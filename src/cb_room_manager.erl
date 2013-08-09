@@ -6,8 +6,7 @@
 -export([start_link/0,
          createroom/2,
          joinroom/2,
-         joinroom/3,
-         broadcast/2]).
+         joinroom/3]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -48,8 +47,8 @@ joinroom(PlayerPid, RoomId, Token) ->
 
 
 
-broadcast(RoomId, #marine{} = Marine) ->
-    gen_server:call(?MODULE, {broadcast, {RoomId, Marine}}).
+% broadcast(RoomId, #marine{} = Marine) ->
+%     gen_server:call(?MODULE, {broadcast, {RoomId, Marine}}).
 
 
 
@@ -103,13 +102,13 @@ handle_call({joinroom, {PlayerPid, RoomId, Token}}, _From, State) ->
         error ->
             Reply = notfound
     end,
-    {reply, Reply, State};
+    {reply, Reply, State}.
 
 
-handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
-    {ok, #room{pid=RoomPid}} = dict:find(RoomId, State),
-    gen_server:cast(RoomPid, {broadcast, Marine}),
-    {reply, ok, State}.
+% handle_call({broadcast, {RoomId, Marine}}, _From, State) ->
+%     {ok, #room{pid=RoomPid}} = dict:find(RoomId, State),
+%     gen_server:cast(RoomPid, {broadcast, Marine}),
+%     {reply, ok, State}.
 
 
 %%--------------------------------------------------------------------

@@ -4,5 +4,6 @@
     hp=100,
     position=#vector2{},
     status='Idle',
-    gunlasttime,
-    flares}).
+    targetposition,
+    gunlasttime={{2013, 8, 9}, {0, 0, 0}},
+    flares=10}).

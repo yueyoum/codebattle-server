@@ -3,8 +3,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1,
-         notify/2]).
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -52,6 +51,8 @@ start_link(Socket) ->
 %%--------------------------------------------------------------------
 init([Socket]) ->
     io:format("New Player~n"),
+    <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
+    random:seed({A, B, C}),
     {ok, #state{sock=Socket}, ?TIMEOUT}.
 
 %%--------------------------------------------------------------------
@@ -83,17 +84,29 @@ handle_call(all_marines, _From, #state{marine=MyMarines} = State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_cast({broadcast, Marine}, #state{sock=Sock} = State) ->
-    ok = notify(Marine, Sock),
+handle_cast({broadcast, Marine}, #state{sock=Sock, marine=MyMarines} = State) ->
+    ok = notify(Marine, MyMarines, Sock),
     {noreply, State};
+
+handle_cast({broadcast, Role, Marine}, #state{sock=Sock, marine=MyMarines} = State) ->
+    Data =
+    case dict:is_key(Marine#marine.id, MyMarines) of
+        true -> utils:marine_record_to_proto(Marine, own, Role);
+        false -> utils:marine_record_to_proto(Marine, others, Role)
+    end,
+    ok = notify_send(Data, Sock),
+    {noreply, State};
+
 
 
 handle_cast({report, 
     {marinereport,
      toidle,
      {marinestatus, Id, 'Idle', {vector2, X, Z}},
-     undefined,
-     undefined}},
+     _,
+     _,
+     _,
+     _}},
      #state{sock=Sock, marine=MyMarines} = State) ->
 
     NewState =
@@ -112,10 +125,12 @@ handle_cast({report,
 handle_cast({report,
     {marinereport,
      damage,
-     undefined,
+     _,
      {marinestatus, Id1, Status1, {vector2, X1, Z1}},
-     {marinestatus, Id2, Status2, {vector2, X2, Z2}}}},
-     #state{sock=Sock, marine=MyMarines, room=Room} = State) ->
+     {marinestatus, Id2, Status2, {vector2, X2, Z2}},
+     _,
+     _}},
+     #state{marine=MyMarines, room=Room} = State) ->
 
     NewState =
     case dict:is_key(Id2, MyMarines) of
@@ -125,26 +140,62 @@ handle_cast({report,
                     State;
                 true ->
                     M = dict:fetch(Id1, MyMarines),
-                    NewM = M#marine{position=#vector2{x=X1, z=Z1}},
-                    gen_server:cast(Room#room.pid, {broadcast, NewM}),
+                    NewM = M#marine{status=Status1, position=#vector2{x=X1, z=Z1}},
+                    gen_server:cast(Room#room.pid, {broadcast, 'Attacker', NewM}),
                     State#state{marine = dict:store(Id1, NewM, MyMarines)}
             end;
         true ->
             M = dict:fetch(Id2, MyMarines),
-            Hp = M#marine.hp - 20,
+            Hp = M#marine.hp - 10,
             NewM = 
             case Hp > 0 of
                 true ->
-                    M#marine{position=#vector2{x=X2, z=Z2}, hp=Hp};
+                    M#marine{position=#vector2{x=X2, z=Z2}, hp=Hp, status=Status2};
                 false ->
                     M#marine{position=#vector2{x=X2, z=Z2}, hp=0, status='Dead'}
             end,
 
-            gen_server:cast(Room#room.pid, {broadcast, NewM}),
+            gen_server:cast(Room#room.pid, {broadcast, 'Injured', NewM}),
             gen_server:cast(Room#room.pid, {to_observer, NewM}),
             State#state{marine = dict:store(Id2, NewM, MyMarines)}
     end,
     {noreply, NewState};
+
+
+handle_cast({report,
+    {marinereport,
+     flares,
+     _,
+     _,
+     _,
+     MarineId,
+     Marines}},
+     #state{marine=MyMarines, room=Room} = State) ->
+
+    UpdateOwn = fun({marinestatus, Id, Status, {vector2, X, Z}}, D) ->
+        case dict:is_key(Id, D) of
+            false -> D;
+            true ->
+                Old = dict:fetch(Id, D),
+                New = Old#marine{status=Status, position=#vector2{x=X, z=Z}},
+                dict:store(Id, New, D)
+        end
+    end,
+
+    NewMyMarines = lists:foldl(UpdateOwn, MyMarines, Marines),
+
+    %% update self first, and then if MarineId belongs to me,
+    %% send all marines state to self.
+    %% otherwise do nothing.
+
+    case dict:is_key(MarineId, MyMarines) of
+        false -> ok;
+        true -> gen_server:cast(Room#room.pid, {flares_report, self()})
+    end,
+
+    {noreply, State#state{marine=NewMyMarines}};
+
+
 
 
 handle_cast(startbattle, #state{sock=Sock} = State) ->
@@ -266,20 +317,43 @@ marineoperate({marineoperate, Id, Status, TargetPosition},
         RoomPid ->
             case dict:find(Id, OwnMarines) of
                 {ok, M} ->
-                    NewTargetPosition =
-                    case TargetPosition of
-                        undefined -> M#marine.position;
-                        {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
-                    end,
-                    NewM = M#marine{status=Status, targetposition=NewTargetPosition},
-                    gen_server:cast(RoomPid, {to_observer, NewM}),
-                    marine_action(RoomPid, NewM, Sock),
-                    State#state{marine=dict:store(Id, NewM, OwnMarines)};
+                    case marine_status_check(M, Status) of
+                        {ok, NewM} ->
+                            NewTargetPosition =
+                            case TargetPosition of
+                                undefined -> undefined;
+                                {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
+                            end,
+                            NewM2 = NewM#marine{status=Status, targetposition=NewTargetPosition},
+                            gen_server:cast(RoomPid, {to_observer, NewM2}),
+                            marine_action(RoomPid, NewM2),
+                            State#state{marine=dict:store(Id, NewM2, OwnMarines)};
+                        {error, ErrorCode} ->
+                            cmdresponse(Sock, marineoperate, ErrorCode),
+                            State
+                    end;
                 error ->
                     cmdresponse(Sock, marineoperate, 11),
                     State
             end
     end.
+
+
+
+marine_status_check(#marine{gunlasttime=T} = M, 'GunAttack') ->
+    case utils:can_make_gun_shoot(T) of
+        false -> {error, 20};
+        true -> {ok, M#marine{gunlasttime=calendar:now_to_datetime(now())}}
+    end;
+
+marine_status_check(#marine{flares=FlaresAmount} = M, 'Flares') ->
+    case FlaresAmount > 0 of
+        false -> {error, 21};
+        true -> {ok, M#marine{flares=FlaresAmount-1}}
+    end;
+
+marine_status_check(M, _) ->
+    {ok, M}.
 
 
 cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
@@ -304,29 +378,41 @@ cmdresponse(Sock, {Cmd, Value}) ->
     ok.
 
 
-marine_action(_, #marine{status=Status}, _) when Status =:= 'Idle'; Status =:= 'Run'; Status =:= 'Dead' ->
+marine_action(_, #marine{status=Status}) when Status =:= 'Idle'; Status =:= 'Run'; Status =:= 'Dead' ->
     ok;
 
-marine_action(RoomPid, M, Sock) ->
-    cb_room:marine_action(RoomPid, M, Sock).
+marine_action(RoomPid, M) ->
+    cb_room:marine_action(RoomPid, M).
+
+
+notify(Marines, MyMarinesDict, Sock) when is_list(Marines) ->
+    MyMarines = [V || {_, V} <- dict:to_list(MyMarinesDict)],
+    Data = [utils:marine_record_to_proto(M, others) || M <- Marines] ++
+           [utils:marine_record_to_proto(M) || M <- MyMarines],
+    notify_send(Data, Sock);
+
+
+notify(#marine{} = Marine, MyMarines, Sock) ->
+    notify([Marine], MyMarines, Sock).
 
 
 notify(Marines, Sock) when is_list(Marines) ->
     Data = [utils:marine_record_to_proto(M) || M <- Marines],
-    Msg = api_pb:encode_message({message, senceupdate,
-        undefined,
-        {senceupdate, Data}
-        }),
-    ok = gen_tcp:send(Sock, Msg),
-    ok;
+    notify_send(Data, Sock);
 
 notify(#marine{} = Marine, Sock) ->
     notify([Marine], Sock).
 
+notify_send(Data, Sock) ->
+    Msg = api_pb:encode_message({message, senceupdate,
+        undefined,
+        {senceupdate, Data}
+        }),
+    ok = gen_tcp:send(Sock, Msg).
+
+
 
 create_random_marines_record(Num, Xmax, Zmax) ->
-    <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
-    random:seed({A, B, C}),
     [utils:make_new_marine(
         utils:random_int(),
         random:uniform(Xmax),

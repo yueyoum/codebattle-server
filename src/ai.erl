@@ -3,12 +3,12 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
-         % own_marine_ids/1,
-         % other_marine_ids/1,
-         % move/4,
-         % flares/2,
-         % gunshoot/4]).
+-export([start_link/1,
+         own_marine_ids/1,
+         other_marine_ids/1,
+         call_move/4,
+         call_flares/2,
+         call_gunshoot/4]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -18,11 +18,19 @@
          terminate/2,
          code_change/3]).
 
--include("../include/cb.hrl").
 
 -define(TIMEOUT, 1000 * 10).
 
--record(state, {sdk, manager, mapx, mapz, started=false, own=dict:new(), others=dict:new()}).
+-record(vector2, {x=0, z=0}).
+-record(marine, {
+    id,
+    hp,
+    position=#vector2{},
+    status,
+    gunlasttime={{2013, 8, 10}, {0, 0, 0}},
+    flares,
+    role}).
+-record(state, {sdk, mapx, mapz, started=false, own=dict:new(), others=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -38,20 +46,20 @@
 start_link(RoomId) ->
     gen_server:start_link(?MODULE, [RoomId], []).
 
-% own_marine_ids(Pid) ->
-%     gen_server:call(Pid, own_marine_ids).
+own_marine_ids(Pid) ->
+    gen_server:call(Pid, own_marine_ids).
 
-% other_marine_ids(Pid) ->
-%     gen_server:call(Pid, other_marine_ids).
+other_marine_ids(Pid) ->
+    gen_server:call(Pid, other_marine_ids).
 
-% move(Pid, MarineId, X, Z) ->
-%     gen_server:call(Pid, {move, MarineId, X, Z}).
+call_move(Pid, MarineId, X, Z) ->
+    gen_server:call(Pid, {move, MarineId, X, Z}).
 
-% flares(Pid, MarineId) ->
-%     gen_server:call(Pid, {flares, MarineId}).
+call_flares(Pid, MarineId) ->
+    gen_server:call(Pid, {flares, MarineId}).
 
-% gunshoot(Pid, MarineId, X, Z) ->
-%     gen_server:call(Pid, {gunshoot, MarineId, X, Z}).
+call_gunshoot(Pid, MarineId, X, Z) ->
+    gen_server:call(Pid, {gunshoot, MarineId, X, Z}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -98,45 +106,45 @@ init([RoomId]) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_call(_Request, _From, State) ->
-    {reply, ok, State}.
+% handle_call(_Request, _From, State) ->
+%     {reply, ok, State}.
 
-% handle_call(own_marine_ids, _From, #state{own=Own} = State) ->
-%     {reply, dict:fetch_keys(Own), State};
+handle_call(own_marine_ids, _From, #state{own=Own} = State) ->
+    {reply, dict:fetch_keys(Own), State};
 
-% handle_call(other_marine_ids, _From, #state{others=Others} = State) ->
-%     {reply, dict:fetch_keys(Others), State};
+handle_call(other_marine_ids, _From, #state{others=Others} = State) ->
+    {reply, dict:fetch_keys(Others), State};
 
 
-% handle_call({move, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
-%     Reply =
-%     case dict:is_key(MarineId, Own) of
-%         true ->
-%             ai_sdk:marineoperate(Sdk, MarineId, 'Run', X, Z);
-%         false ->
-%             not_found_this_marine
-%     end,
-%     {reply, Reply, State};
+handle_call({move, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
+    Reply =
+    case dict:is_key(MarineId, Own) of
+        true ->
+            ai_sdk:marineoperate(Sdk, MarineId, 'Run', X, Z);
+        false ->
+            not_found_this_marine
+    end,
+    {reply, Reply, State};
 
-% handle_call({flares, MarineId}, _From, #state{sdk=Sdk, own=Own} = State) ->
-%     Reply = 
-%     case dict:is_key(MarineId, Own) of
-%         true ->
-%             ai_sdk:marineoperate(Sdk, MarineId, 'Flares');
-%         false ->
-%             not_found_this_marine
-%     end,
-%     {reply, Reply, State};
+handle_call({flares, MarineId}, _From, #state{sdk=Sdk, own=Own} = State) ->
+    Reply = 
+    case dict:is_key(MarineId, Own) of
+        true ->
+            ai_sdk:marineoperate(Sdk, MarineId, 'Flares');
+        false ->
+            not_found_this_marine
+    end,
+    {reply, Reply, State};
 
-% handle_call({gunshoot, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
-%     Reply = 
-%     case dict:is_key(MarineId, Own) of
-%         true ->
-%             ai_sdk:marineoperate(Sdk, MarineId, 'GunAttack', X, Z);
-%         false ->
-%             not_found_this_marine
-%     end,
-%     {reply, Reply, State}.
+handle_call({gunshoot, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
+    Reply = 
+    case dict:is_key(MarineId, Own) of
+        true ->
+            ai_sdk:marineoperate(Sdk, MarineId, 'GunAttack', X, Z);
+        false ->
+            not_found_this_marine
+    end,
+    {reply, Reply, State}.
 
 
 %%--------------------------------------------------------------------
@@ -151,21 +159,22 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}, Marines}, State) ->
     Fun = fun(M, D) ->
-        RM = utils:marine_proto_to_record(M),
+        RM = make_new_marine_record(M),
         dict:store(RM#marine.id, RM, D)
     end,
     Own = lists:foldl(Fun, dict:new(), Marines),
+    io:format("joinroomresponse, Marines = ~p~n", [Own]),
     {noreply, State#state{mapx=X, mapz=Z, own=Own}};
 
 
 handle_cast({senceupdate, Marine}, State) ->
     NewState = action(Marine, State),
-    Timeout = (random:uniform(3) + random:uniform(3)) * 1000,
-    {noreply, NewState, Timeout};
+    % Timeout = (random:uniform(3) + random:uniform(3)) * 1000,
+    {noreply, NewState};
 
 handle_cast(startbattle, State) ->
-    Timeout = (random:uniform(5) + random:uniform(5)) * 1000,
-    {noreply, State#state{started=true}, Timeout}.
+    % Timeout = (random:uniform(5) + random:uniform(5)) * 1000,
+    {noreply, State#state{started=true}}.
 
 
 %%--------------------------------------------------------------------
@@ -180,9 +189,9 @@ handle_cast(startbattle, State) ->
 %%--------------------------------------------------------------------
 
 handle_info(timeout, #state{sdk=Sdk, own=Own} = State) ->
-    io:format("ai timeout, start Flares~n"),
-    Id = lists:nth(1, dict:fetch_keys(Own)),
-    flares(Sdk, Id),
+    % io:format("ai timeout, start Flares~n"),
+    % Id = lists:nth(1, dict:fetch_keys(Own)),
+    % flares(Sdk, Id),
     {noreply, State}.
 
 
@@ -218,7 +227,22 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 action(Marines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
-    Ms = [utils:marine_proto_to_record(M) || M <- Marines],
+    UpdateFun = fun({marine, Id, _, _, _, _, _, _} = M) ->
+        case dict:is_key(Id, Own) of
+            true ->
+                update_marine_record(M, dict:fetch(Id, Own));
+            false ->
+                case dict:is_key(Id, Others) of
+                    true ->
+                        update_marine_record(M, dict:fetch(Id, Others));
+                    false ->
+                        make_new_marine_record(M)
+                end
+        end
+    end,
+
+    Ms = [UpdateFun(M) || M <- Marines],
+
     FunMyOwn = fun(M) -> dict:is_key(M#marine.id, Own) end,
 
     OwnMarines = lists:filter(FunMyOwn, Ms),
@@ -237,26 +261,27 @@ action(Marines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
     %% or others has hitted any other marines.
     io:format("Own ids = ~p~n", [dict:fetch_keys(Own)]),
 
-    case length(OthersMarines) of
-        0 -> action_no_others(MyMarines, State);
-        _ ->
-            case lists:any(fun(T) -> is_flares(T) end, MyMarines) of
-                true ->
-                    action_after_by_own_flares(MyMarines, OthersMarines, State);
-                false ->
-                    case lists:any(fun(T) -> is_flares(T) end, OthersMarines) of
-                        true ->
-                            action_after_others_flares(MyMarines, lists:nth(1, OthersMarines), State);
-                        false ->
-                            case lists:any(fun(T) -> is_gunattack(T) end, OthersMarines) of
-                                true ->
-                                    action_after_others_shoot(MyMarines, lists:nth(1, OthersMarines), State);
-                                false ->
-                                    action_after_bullet_hitted(MyMarines, OthersMarines, State)
-                            end
-                    end
-            end
-    end.
+    % case length(OthersMarines) of
+    %     0 -> action_no_others(MyMarines, State);
+    %     _ ->
+    %         case lists:any(fun(T) -> is_flares(T) end, MyMarines) of
+    %             true ->
+    %                 action_after_by_own_flares(MyMarines, OthersMarines, State);
+    %             false ->
+    %                 case lists:any(fun(T) -> is_flares(T) end, OthersMarines) of
+    %                     true ->
+    %                         action_after_others_flares(MyMarines, lists:nth(1, OthersMarines), State);
+    %                     false ->
+    %                         case lists:any(fun(T) -> is_gunattack(T) end, OthersMarines) of
+    %                             true ->
+    %                                 action_after_others_shoot(MyMarines, lists:nth(1, OthersMarines), State);
+    %                             false ->
+    %                                 action_after_bullet_hitted(MyMarines, OthersMarines, State)
+    %                         end
+    %                 end
+    %         end
+    % end.
+    State.
 
 
 action_no_others(OwnMarines, State) ->
@@ -350,3 +375,10 @@ flares(Sdk, Id) ->
 gun_attack_and_run(Sdk, Id, Gx, Gz, Rx, Rz) ->
     gun_attack(Sdk, Id, Gx, Gz),
     move(Sdk, Id, Rx, Rz).
+
+
+update_marine_record({marine, Id, Hp, {vector2, X, Z}, Status, _, FlaresAmount, Role}, M) ->
+    M#marine{hp=Hp, position=#vector2{x=X, z=Z}, status=Status, flares=FlaresAmount, role=Role}.
+
+make_new_marine_record({marine, Id, Hp, {vector2, X, Z}, Status, _, FlaresAmount, Role}) ->
+    #marine{id=Id, hp=Hp, position=#vector2{x=X, z=Z}, status=Status, flares=FlaresAmount, role=Role}.

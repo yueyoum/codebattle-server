@@ -5,7 +5,7 @@
 %% API
 -export([start_link/3,
          all_players/1,
-         marine_action/3,
+         marine_action/2,
          marine_report/2]).
 
 %% gen_server callbacks
@@ -38,8 +38,8 @@ start_link(OwnerPid, RoomId, MapId) ->
 all_players(RoomPid) ->
     gen_server:call(RoomPid, all_players).
 
-marine_action(RoomPid, Marine, Sock) ->
-    gen_server:cast(RoomPid, {marine_action, Marine, Sock, self()}).
+marine_action(RoomPid, Marine) ->
+    gen_server:cast(RoomPid, {marine_action, Marine, self()}).
 
 marine_report(RoomPid, Report) ->
     gen_server:cast(RoomPid, {marine_report, Report}).
@@ -123,18 +123,24 @@ handle_call(all_players, _From, #state{players=Players} = State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({to_observer, Marine}, #state{observers=Observers} = State) ->
-    io:format("cb_room to_observer messages, observers = ~p~n", [Observers]),
     broadcast(Marine, Observers),
     {noreply, State};
 
 
-handle_cast({broadcast, Marine}, #state{players=Players} = State) ->
-    broadcast(Marine, Players),
+handle_cast({broadcast, Data}, #state{players=Players} = State) ->
+    broadcast(Data, Players),
     {noreply, State};
 
-handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
-    io:format("cb_room broadcasting messages, players = ~p, IgnorePid = ~p~n", [Players, IgnorePid]),
-    broadcast(Marine, lists:delete(IgnorePid, Players)),
+% handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
+%     io:format("cb_room broadcasting messages, players = ~p, IgnorePid = ~p~n", [Players, IgnorePid]),
+%     broadcast(Marine, lists:delete(IgnorePid, Players)),
+%     {noreply, State};
+
+handle_cast({broadcast, Role, Marine}, #state{players=Players} = State) ->
+    lists:foreach(
+        fun(P) -> gen_server:cast(P, {broadcast, Role, Marine}) end,
+        Players
+        ),
     {noreply, State};
 
 
@@ -149,17 +155,18 @@ handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
 %     {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}};
 
 
-handle_cast({marine_action, #marine{status='Flares'} = M, Sock, CallerPid}, #state{players=Players} = State) ->
-    Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- Players] ),
-    io:format("cb_room, 'Flares', ALL Marines = ~p~n", [Marines]),
-    ok = cb_player:notify(Marines, Sock),
+handle_cast({marine_action, #marine{status='Flares'} = M, CallerPid}, #state{players=Players} = State) ->
+    OtherPlayers = lists:delete(CallerPid, Players),
+    Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- OtherPlayers] ),
+    % ok = cb_player:notify(Marines, Sock),
+    gen_server:cast(CallerPid, {broadcast, Marines}),
 
     %% notify other players that this marins's state
-    broadcast(M, lists:delete(CallerPid, Players)),
+    broadcast(M, OtherPlayers),
     {noreply, State};
 
 
-handle_cast({marine_action, #marine{status='GunAttack'} = M, _Sock, CallerPid}, #state{players=Players} = State) ->
+handle_cast({marine_action, #marine{status='GunAttack'} = M, CallerPid}, #state{players=Players} = State) ->
     %% other players know this marine's state
     broadcast(M, lists:delete(CallerPid, Players)),
     {noreply, State};
@@ -167,6 +174,13 @@ handle_cast({marine_action, #marine{status='GunAttack'} = M, _Sock, CallerPid}, 
 
 handle_cast({marine_report, Report}, #state{players=Players} = State) ->
     report(Report, Players),
+    {noreply, State};
+
+
+handle_cast({flares_report, CallerPid}, #state{players=Players} = State) ->
+    timer:sleep(50),
+    Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- lists:delete(CallerPid, Players)] ),
+    gen_server:cast(CallerPid, {broadcast, Marines}),
     {noreply, State}.
 
 
@@ -215,8 +229,8 @@ code_change(_OldVsn, State, _Extra) ->
 report(Data, Players) ->
     broadcast(Data, Players, report).
 
-broadcast(Marine, Players) ->
-    broadcast(Marine, Players, broadcast).
+broadcast(Data, Players) ->
+    broadcast(Data, Players, broadcast).
 
 broadcast(Data, Players, MessageType) ->
     lists:foreach(
