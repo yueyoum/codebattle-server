@@ -19,7 +19,11 @@ random_list() ->
 
 marine_proto_to_record({marine, Id, Hp, {vector2, Cx, Cz}, Status, {vector2, Tx, Tz}}) ->
     #marine{id=Id, hp=Hp, position=#vector2{x=Cx, z=Cz}, status=Status,
-            targetposition=#vector2{x=Tx, z=Tz}}.
+            targetposition=#vector2{x=Tx, z=Tz}};
+
+marine_proto_to_record({marine, Id, Hp, {vector2, Cx, Cz}, Status, undefined}) ->
+    #marine{id=Id, hp=Hp, position=#vector2{x=Cx, z=Cz}, status=Status}.
+
 
 marine_record_to_proto(#marine{id=Id,
                                hp=Hp,

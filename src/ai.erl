@@ -3,12 +3,12 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1,
-         own_marine_ids/1,
-         other_marine_ids/1,
-         move/4,
-         flares/2,
-         gunshoot/4]).
+-export([start_link/1]).
+         % own_marine_ids/1,
+         % other_marine_ids/1,
+         % move/4,
+         % flares/2,
+         % gunshoot/4]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -38,20 +38,20 @@
 start_link(RoomId) ->
     gen_server:start_link(?MODULE, [RoomId], []).
 
-own_marine_ids(Pid) ->
-    gen_server:call(Pid, own_marine_ids).
+% own_marine_ids(Pid) ->
+%     gen_server:call(Pid, own_marine_ids).
 
-other_marine_ids(Pid) ->
-    gen_server:call(Pid, other_marine_ids).
+% other_marine_ids(Pid) ->
+%     gen_server:call(Pid, other_marine_ids).
 
-move(Pid, MarineId, X, Z) ->
-    gen_server:call(Pid, {move, MarineId, X, Z}).
+% move(Pid, MarineId, X, Z) ->
+%     gen_server:call(Pid, {move, MarineId, X, Z}).
 
-flares(Pid, MarineId) ->
-    gen_server:call(Pid, {flares, MarineId}).
+% flares(Pid, MarineId) ->
+%     gen_server:call(Pid, {flares, MarineId}).
 
-gunshoot(Pid, MarineId, X, Z) ->
-    gen_server:call(Pid, {gunshoot, MarineId, X, Z}).
+% gunshoot(Pid, MarineId, X, Z) ->
+%     gen_server:call(Pid, {gunshoot, MarineId, X, Z}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -72,7 +72,6 @@ init([RoomId]) ->
     <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
     random:seed({A, B, C}),
     {ok, SdkPid} = ai_sdk:start_link(self()),
-    % {ok, StateManagerPid} = ai_state_manager:start_link(),
     IP = {127, 0, 0, 1},
     Port = 8888,
 
@@ -81,7 +80,6 @@ init([RoomId]) ->
     %% an ai must join a room before any action,
     %% so It's ok that we do this in init function.
     ok = ai_sdk:joinroom(SdkPid, RoomId),
-    % {ok, #state{sdk=SdkPid, manager=StateManagerPid}}.
     {ok, #state{sdk=SdkPid}}.
 
 
@@ -100,46 +98,45 @@ init([RoomId]) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_call({createmarine, X, Z}, _From, #state{sdk=Sdk} = State) ->
-    ok = ai_sdk:createmarine(Sdk, X, Z),
-    {reply, ok, State};
+handle_call(_Request, _From, State) ->
+    {reply, ok, State}.
 
-handle_call(own_marine_ids, _From, #state{own=Own} = State) ->
-    {reply, dict:fetch_keys(Own), State};
+% handle_call(own_marine_ids, _From, #state{own=Own} = State) ->
+%     {reply, dict:fetch_keys(Own), State};
 
-handle_call(other_marine_ids, _From, #state{others=Others} = State) ->
-    {reply, dict:fetch_keys(Others), State};
+% handle_call(other_marine_ids, _From, #state{others=Others} = State) ->
+%     {reply, dict:fetch_keys(Others), State};
 
 
-handle_call({move, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
-    Reply =
-    case dict:is_key(MarineId, Own) of
-        true ->
-            ai_sdk:marineoperate(Sdk, MarineId, 'Run', X, Z);
-        false ->
-            not_found_this_marine
-    end,
-    {reply, Reply, State};
+% handle_call({move, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
+%     Reply =
+%     case dict:is_key(MarineId, Own) of
+%         true ->
+%             ai_sdk:marineoperate(Sdk, MarineId, 'Run', X, Z);
+%         false ->
+%             not_found_this_marine
+%     end,
+%     {reply, Reply, State};
 
-handle_call({flares, MarineId}, _From, #state{sdk=Sdk, own=Own} = State) ->
-    Reply = 
-    case dict:is_key(MarineId, Own) of
-        true ->
-            ai_sdk:marineoperate(Sdk, MarineId, 'Flares');
-        false ->
-            not_found_this_marine
-    end,
-    {reply, Reply, State};
+% handle_call({flares, MarineId}, _From, #state{sdk=Sdk, own=Own} = State) ->
+%     Reply = 
+%     case dict:is_key(MarineId, Own) of
+%         true ->
+%             ai_sdk:marineoperate(Sdk, MarineId, 'Flares');
+%         false ->
+%             not_found_this_marine
+%     end,
+%     {reply, Reply, State};
 
-handle_call({gunshoot, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
-    Reply = 
-    case dict:is_key(MarineId, Own) of
-        true ->
-            ai_sdk:marineoperate(Sdk, MarineId, 'GunAttack', X, Z);
-        false ->
-            not_found_this_marine
-    end,
-    {reply, Reply, State}.
+% handle_call({gunshoot, MarineId, X, Z}, _From, #state{sdk=Sdk, own=Own} = State) ->
+%     Reply = 
+%     case dict:is_key(MarineId, Own) of
+%         true ->
+%             ai_sdk:marineoperate(Sdk, MarineId, 'GunAttack', X, Z);
+%         false ->
+%             not_found_this_marine
+%     end,
+%     {reply, Reply, State}.
 
 
 %%--------------------------------------------------------------------
@@ -160,40 +157,15 @@ handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}, Marines}, State) ->
     Own = lists:foldl(Fun, dict:new(), Marines),
     {noreply, State#state{mapx=X, mapz=Z, own=Own}};
 
-handle_cast({createmarineresponse, Marine}, #state{own=Own} = State) ->
-    io:format("createmarineresponse, Marine = ~p~n", [Marine]),
-    M = utils:marine_proto_to_record(Marine),
-    {noreply, State#state{own=dict:store(M#marine.id, M, Own)}};
 
-handle_cast({senceupdate, Marine}, State) when is_list(Marine) ->
-    Fun = fun(M, S) -> update_marine(M, S) end,
-    NewState = lists:foldl(Fun, State, Marine),
-    {noreply, NewState};
+handle_cast({senceupdate, Marine}, State) ->
+    NewState = action(Marine, State),
+    Timeout = (random:uniform(3) + random:uniform(3)) * 1000,
+    {noreply, NewState, Timeout};
 
 handle_cast(startbattle, State) ->
-    {noreply, State#state{started=true}}.
-
-% handle_cast({ai_state_report, Id, Cx, Cz, Tx, Tz}, #state{own=Own, others=Others} = State) ->
-%     io:format("ai_state_report: ~p, ~p ~p, ~p, ~p ~n", [Id, Cx, Cz, Tx, Tz]),
-%     Marine =
-%     case dict:find(Id, Own) of
-%         {ok, M} ->
-%             {marine, Id, M#marine.name, M#marine.tag, M#marine.hpmax, M#marine.hp,
-%             {vector2, Cx, Cz}, M#marine.status, {vector2, Tx, Tz}, M#marine.targetid
-%             };
-%         error ->
-%             case dict:find(Id, Others) of
-%                 {ok, M} ->
-%                     {marine, Id, M#marine.name, M#marine.tag, M#marine.hpmax, M#marine.hp,
-%                     {vector2, Cx, Cz}, M#marine.status, {vector2, Tx, Tz}, M#marine.targetid
-%                     };
-%                 error ->
-%                     throw("ai_state_report id not found")
-%             end
-%     end,
-%     gen_server:cast(self(), {senceupdate, Marine}),
-%     {noreply, State}.
-
+    Timeout = (random:uniform(5) + random:uniform(5)) * 1000,
+    {noreply, State#state{started=true}, Timeout}.
 
 
 %%--------------------------------------------------------------------
@@ -207,7 +179,10 @@ handle_cast(startbattle, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info(_Info, State) ->
+handle_info(timeout, #state{sdk=Sdk, own=Own} = State) ->
+    io:format("ai timeout, start Flares~n"),
+    Id = lists:nth(1, dict:fetch_keys(Own)),
+    flares(Sdk, Id),
     {noreply, State}.
 
 
@@ -241,33 +216,137 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-update_marine({marine, Id, _, _, _, _} = M, #state{own=Own} = State) ->
-    case dict:is_key(Id, Own) of
-        true ->
-            update_own_marine(M, State);
-        false ->
-            update_others_marine(M, State)
+
+action(Marines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
+    Ms = [utils:marine_proto_to_record(M) || M <- Marines],
+    FunMyOwn = fun(M) -> dict:is_key(M#marine.id, Own) end,
+
+    OwnMarines = lists:filter(FunMyOwn, Ms),
+    OthersMarines = Marines -- OwnMarines,
+
+    UpdateOwn = fun(M, D) -> dict:store(M#marine.id, M, D) end,
+    NewOwn = lists:foldl(UpdateOwn, Own, OwnMarines),
+
+    MyMarines = [V || {_, V} <- dict:to_list(NewOwn)],
+
+
+    %% If got OthersMarines here, 
+    %% means either you have Flares just now,
+    %% or it should be others doing Flares, GunAttack,
+    %% or others has been hitted,
+    %% or others has hitted any other marines.
+    io:format("Own ids = ~p~n", [dict:fetch_keys(Own)]),
+
+    case length(OthersMarines) of
+        0 -> action_no_others(MyMarines, State);
+        _ ->
+            case lists:any(fun(T) -> is_flares(T) end, MyMarines) of
+                true ->
+                    action_after_by_own_flares(MyMarines, OthersMarines, State);
+                false ->
+                    case lists:any(fun(T) -> is_flares(T) end, OthersMarines) of
+                        true ->
+                            action_after_others_flares(MyMarines, lists:nth(1, OthersMarines), State);
+                        false ->
+                            case lists:any(fun(T) -> is_gunattack(T) end, OthersMarines) of
+                                true ->
+                                    action_after_others_shoot(MyMarines, lists:nth(1, OthersMarines), State);
+                                false ->
+                                    action_after_bullet_hitted(MyMarines, OthersMarines, State)
+                            end
+                    end
+            end
     end.
 
 
+action_no_others(OwnMarines, State) ->
+    io:format("No OthersMarines~n"),
+    State.
 
+action_after_by_own_flares(OwnMarines, OthersMarines, #state{sdk=Sdk} = State) ->
+    %% My Marines Flares, then I got all Marines in the battle.
+    io:format("Got OthersMarines, due to I have Flares just now~n"),
 
-update_own_marine({marine, Id, Hp, _, _, _} = M, #state{own=Own} = State) ->
-    Marine = dict:fetch(Id, Own),
-    case Marine#marine.hp > Hp of
-        true ->
-            io:format("Marine ~p UnderAttack~n", [Id]);
-        false ->
-            ok
+    Target = choose_marine_random(OthersMarines),
+    Fun = fun(#marine{id=Id}) ->
+        gun_attack_and_run(Sdk,
+                           Id,
+                           Target#marine.position#vector2.x,
+                           Target#marine.position#vector2.z,
+                           random:uniform(50),
+                           random:uniform(50))
     end,
-    NewOwn = dict:store(Id, utils:marine_proto_to_record(M), Own),
-    State#state{own=NewOwn}.
+
+    lists:foreach(Fun, OwnMarines),
+    State.
+
+action_after_others_flares(OwnMarines, OthersMarine, #state{sdk=Sdk} = State) ->
+    %% Other Marines Flares, So He knew my state
+    io:format("Got OthersMarines, Other Flares, OwnMarines = ~p~n", [OwnMarines]),
+    Target = OthersMarine,
+    Fun = fun(#marine{id=Id}) ->
+        gun_attack_and_run(Sdk,
+                           Id,
+                           Target#marine.position#vector2.x,
+                           Target#marine.position#vector2.z,
+                           random:uniform(50),
+                           random:uniform(50))
+    end,
+
+    lists:foreach(Fun, OwnMarines),
+    State.
 
 
-update_others_marine(
-    {marine, Id, Hp, {vector2, Cx, Cz}, Status, _} = Marine,
-    #state{sdk=Sdk, own=Own, others=Others, started=Started} = State) ->
+action_after_others_shoot(OwnMarines, OthersMarine, #state{sdk=Sdk} = State) ->
+    %% Other Marines Shoot, He didn't know My state right now.
+    io:format("Got OthersMarines, Other GunAttack~n"),
+    Target = OthersMarine,
+    Fun = fun(#marine{id=Id}) ->
+        gun_attack_and_run(Sdk,
+                           Id,
+                           Target#marine.position#vector2.x,
+                           Target#marine.position#vector2.z,
+                           random:uniform(50),
+                           random:uniform(50))
+    end,
 
-    NewOthers = dict:store(Id, utils:marine_proto_to_record(Marine), Others),
+    lists:foreach(Fun, OwnMarines),
+    State.
 
-    State#state{others=NewOthers}.
+action_after_bullet_hitted(OwnMarines, OthersMarines, State) ->
+    %% Buttle has hitted some marine.
+    io:format("Got OthersMarines, Bullet Hitted~n"),
+    State.
+
+
+is_flares(#marine{status=Status}) ->
+    Status == 'Flares'.
+
+is_gunattack(#marine{status=Status}) ->
+    Status == 'GunAttack'.
+
+is_initiative(M) ->
+    is_flares(M) orelse is_gunattack(M).
+
+choose_marine_random(Ms) ->
+    lists:nth(random:uniform(length(Ms)), Ms).
+
+choose_marine_by_hp(Ms) ->
+    Fun = fun(M1, M2) -> M1#marine.hp =< M2#marine.hp end,
+    HpMs = lists:sort(Fun, Ms),
+    lists:nth(1, HpMs).
+
+
+gun_attack(Sdk, Id, X, Z) ->
+    ok = ai_sdk:marineoperate(Sdk, Id, 'GunAttack', X, Z).
+
+move(Sdk, Id, X, Z) ->
+    ok = ai_sdk:marineoperate(Sdk, Id, 'Run', X, Z).
+
+flares(Sdk, Id) ->
+    ok = ai_sdk:marineoperate(Sdk, Id, 'Flares').
+
+
+gun_attack_and_run(Sdk, Id, Gx, Gz, Rx, Rz) ->
+    gun_attack(Sdk, Id, Gx, Gz),
+    move(Sdk, Id, Rx, Rz).
