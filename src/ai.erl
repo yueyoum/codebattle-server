@@ -167,8 +167,8 @@ handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}, Marines}, State) ->
     {noreply, State#state{mapx=X, mapz=Z, own=Own}};
 
 
-handle_cast({senceupdate, Marine}, State) ->
-    NewState = action(Marine, State),
+handle_cast({senceupdate, Own, Others}, State) ->
+    NewState = action(Own, Others, State),
     % Timeout = (random:uniform(3) + random:uniform(3)) * 1000,
     {noreply, NewState};
 
@@ -226,32 +226,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 
-action(Marines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
-    UpdateFun = fun({marine, Id, _, _, _, _, _, _} = M) ->
-        case dict:is_key(Id, Own) of
+action(OwnMarines, OthersMarines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
+    %% Update Marine first
+    UpdateFun = fun({marine, Id, _, _, _, _, _, _} = M, D) ->
+        NewM =
+        case dict:is_key(Id, D) of
             true ->
-                update_marine_record(M, dict:fetch(Id, Own));
+                update_marine_record(M, dict:fetch(Id, D));
             false ->
-                case dict:is_key(Id, Others) of
-                    true ->
-                        update_marine_record(M, dict:fetch(Id, Others));
-                    false ->
-                        make_new_marine_record(M)
-                end
-        end
+                make_new_marine_record(M)
+        end,
+        dict:store(Id, NewM, D)
     end,
 
-    Ms = [UpdateFun(M) || M <- Marines],
-
-    FunMyOwn = fun(M) -> dict:is_key(M#marine.id, Own) end,
-
-    OwnMarines = lists:filter(FunMyOwn, Ms),
-    OthersMarines = Marines -- OwnMarines,
-
-    UpdateOwn = fun(M, D) -> dict:store(M#marine.id, M, D) end,
-    NewOwn = lists:foldl(UpdateOwn, Own, OwnMarines),
-
-    MyMarines = [V || {_, V} <- dict:to_list(NewOwn)],
+    NewOwn = lists:foldl(UpdateFun, Own, OwnMarines),
+    NewOthers = lists:foldl(UpdateFun, Others, OthersMarines),
 
 
     %% If got OthersMarines here, 
@@ -259,7 +248,7 @@ action(Marines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
     %% or it should be others doing Flares, GunAttack,
     %% or others has been hitted,
     %% or others has hitted any other marines.
-    io:format("Own ids = ~p~n", [dict:fetch_keys(Own)]),
+    io:format("Own ids = ~p~n", [dict:fetch_keys(NewOwn)]),
 
     % case length(OthersMarines) of
     %     0 -> action_no_others(MyMarines, State);

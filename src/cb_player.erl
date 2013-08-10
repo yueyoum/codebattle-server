@@ -85,16 +85,19 @@ handle_call(all_marines, _From, #state{marine=MyMarines} = State) ->
 %%--------------------------------------------------------------------
 
 handle_cast({broadcast, Marine}, #state{sock=Sock, marine=MyMarines} = State) ->
-    ok = notify(Marine, MyMarines, Sock),
+    MyMarineList = [V || {_, V} <- dict:to_list(MyMarines)],
+    ok = notify(MyMarineList, Marine, Sock),
     {noreply, State};
 
 handle_cast({broadcast, Role, Marine}, #state{sock=Sock, marine=MyMarines} = State) ->
-    Data =
     case dict:is_key(Marine#marine.id, MyMarines) of
-        true -> utils:marine_record_to_proto(Marine, own, Role);
-        false -> utils:marine_record_to_proto(Marine, others, Role)
+        true -> 
+            Data = utils:marine_record_to_proto(Marine, own, Role),
+            notify_send(Data, [], Sock);
+        false ->
+            Data = utils:marine_record_to_proto(Marine, others, Role),
+            notify_send([], Data, Sock)
     end,
-    ok = notify_send(Data, Sock),
     {noreply, State};
 
 
@@ -116,7 +119,7 @@ handle_cast({report,
         true ->
             M = dict:fetch(Id, MyMarines),
             NewM = M#marine{position=#vector2{x=X, z=Z}, status='Idle'},
-            ok = notify(NewM, Sock),
+            ok = notify([NewM], [], Sock),
             State#state{marine=dict:store(Id, NewM, MyMarines)}
     end,
     {noreply, NewState};
@@ -339,6 +342,8 @@ marineoperate({marineoperate, Id, Status, TargetPosition},
     end.
 
 
+marine_status_check(#marine{status='Dead'}, _) ->
+    {error, 30};
 
 marine_status_check(#marine{gunlasttime=T} = M, 'GunAttack') ->
     case utils:can_make_gun_shoot(T) of
@@ -385,31 +390,21 @@ marine_action(RoomPid, M) ->
     cb_room:marine_action(RoomPid, M).
 
 
-notify(Marines, MyMarinesDict, Sock) when is_list(Marines) ->
-    MyMarines = [V || {_, V} <- dict:to_list(MyMarinesDict)],
-    Data = [utils:marine_record_to_proto(M, others) || M <- Marines] ++
-           [utils:marine_record_to_proto(M) || M <- MyMarines],
-    notify_send(Data, Sock);
+notify(MyMarineList, Marines, Sock) when is_list(Marines) ->
+    OthersData = [utils:marine_record_to_proto(M, others) || M <- Marines],
+    MyData = [utils:marine_record_to_proto(M) || M <- MyMarineList],
+    notify_send(MyData, OthersData, Sock);
 
 
-notify(#marine{} = Marine, MyMarines, Sock) ->
-    notify([Marine], MyMarines, Sock).
+notify(MyMarines, #marine{} = Marine, Sock) when is_list(MyMarines) ->
+    notify(MyMarines, [Marine], Sock).
 
-
-notify(Marines, Sock) when is_list(Marines) ->
-    Data = [utils:marine_record_to_proto(M) || M <- Marines],
-    notify_send(Data, Sock);
-
-notify(#marine{} = Marine, Sock) ->
-    notify([Marine], Sock).
-
-notify_send(Data, Sock) ->
+notify_send(OwnData, OthersData, Sock) ->
     Msg = api_pb:encode_message({message, senceupdate,
         undefined,
-        {senceupdate, Data}
+        {senceupdate, OwnData, OthersData}
         }),
     ok = gen_tcp:send(Sock, Msg).
-
 
 
 create_random_marines_record(Num, Xmax, Zmax) ->

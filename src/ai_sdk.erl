@@ -216,9 +216,11 @@ cmdresponse({cmdresponse, Ret, Cmd, _, _}, State) ->
     io:format("Cmd ~p Error, Error Code = ~p~n", [Cmd, Ret]),
     {ok, State}.
 
-senceupdate({senceupdate, Marine}, #state{worker=Worker} = State) ->
-    io:format("SenceUpdate, at ~p, Marine = ~p~n", [calendar:now_to_datetime(now()), Marine]),
-    gen_server:cast(Worker, {senceupdate, Marine}),
+senceupdate({senceupdate, Own, Others} = Data, #state{worker=Worker} = State) ->
+    io:format("SenceUpdate, at ~p~n", [calendar:now_to_datetime(now())]),
+    io:format("Own = ~p~n", [Own]),
+    io:format("Others = ~p~n", [Others]),
+    gen_server:cast(Worker, Data),
     {ok, State}.
 
 startbattle(#state{worker=Worker} = State) ->

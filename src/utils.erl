@@ -66,8 +66,8 @@ can_make_gun_shoot(GunLastTime) ->
     io:format("can_make_gun_shoot, GunLastTime = ~p~n", [GunLastTime]),
     io:format("~p, ~p, ~p, ~p~n", [A, H, M, S]),
 
-    case A =:= 0 of
-        false -> false;
-        true -> H > 0 orelse M > 0 orelse S >= 2
-    end. 
-
+    case A of
+        Day when Day > 0 -> true;
+        Day when Day =:=0 -> H > 0 orelse M > 0 orelse S >= 2;
+        _ -> false
+    end.

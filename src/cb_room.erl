@@ -158,16 +158,15 @@ handle_cast({broadcast, Role, Marine}, #state{players=Players} = State) ->
 handle_cast({marine_action, #marine{status='Flares'} = M, CallerPid}, #state{players=Players} = State) ->
     OtherPlayers = lists:delete(CallerPid, Players),
     Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- OtherPlayers] ),
-    % ok = cb_player:notify(Marines, Sock),
     gen_server:cast(CallerPid, {broadcast, Marines}),
 
-    %% notify other players that this marins's state
+    %% notify other players that this marine's state
     broadcast(M, OtherPlayers),
     {noreply, State};
 
 
 handle_cast({marine_action, #marine{status='GunAttack'} = M, CallerPid}, #state{players=Players} = State) ->
-    %% other players know this marine's state
+    %% other players will know this marine's state
     broadcast(M, lists:delete(CallerPid, Players)),
     {noreply, State};
 
