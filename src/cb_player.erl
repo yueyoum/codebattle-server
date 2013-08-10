@@ -167,13 +167,14 @@ handle_cast({report,
 
 handle_cast({report,
     {marinereport,
-     flares,
+     Report,
      _,
      _,
      _,
      MarineId,
      Marines}},
-     #state{marine=MyMarines, room=Room} = State) ->
+     #state{marine=MyMarines, room=Room} = State)
+     when Report =:= flares; Report =:= flares2 ; Report =:= gunattack ->
 
     UpdateOwn = fun({marinestatus, Id, Status, {vector2, X, Z}}, D) ->
         case dict:is_key(Id, D) of
@@ -191,9 +192,22 @@ handle_cast({report,
     %% send all marines state to self.
     %% otherwise do nothing.
 
-    case dict:is_key(MarineId, MyMarines) of
-        false -> ok;
-        true -> gen_server:cast(Room#room.pid, {flares_report, self()})
+    case Report of
+        flares ->
+            case dict:is_key(MarineId, NewMyMarines) of
+                false -> ok;
+                true -> gen_server:cast(Room#room.pid, {flares_report, self(), dict:fetch(MarineId, NewMyMarines)})
+            end;
+        flares2 ->
+            case dict:is_key(MarineId, NewMyMarines) of
+                false -> ok;
+                true -> gen_server:cast(Room#room.pid, {flares2_report, self()})
+            end;
+        gunattack ->
+            case dict:is_key(MarineId, NewMyMarines) of
+                false -> ok;
+                true -> gen_server:cast(Room#room.pid, {gunattack_report, self(), dict:fetch(MarineId, NewMyMarines)})
+            end
     end,
 
     {noreply, State#state{marine=NewMyMarines}};
@@ -329,7 +343,7 @@ marineoperate({marineoperate, Id, Status, TargetPosition},
                             end,
                             NewM2 = NewM#marine{status=Status, targetposition=NewTargetPosition},
                             gen_server:cast(RoomPid, {to_observer, NewM2}),
-                            marine_action(RoomPid, NewM2),
+                            % marine_action(RoomPid, NewM2),
                             State#state{marine=dict:store(Id, NewM2, OwnMarines)};
                         {error, ErrorCode} ->
                             cmdresponse(Sock, marineoperate, ErrorCode),
@@ -383,11 +397,11 @@ cmdresponse(Sock, {Cmd, Value}) ->
     ok.
 
 
-marine_action(_, #marine{status=Status}) when Status =:= 'Idle'; Status =:= 'Run'; Status =:= 'Dead' ->
-    ok;
+% marine_action(_, #marine{status=Status}) when Status =:= 'Idle'; Status =:= 'Run'; Status =:= 'Dead' ->
+%     ok;
 
-marine_action(RoomPid, M) ->
-    cb_room:marine_action(RoomPid, M).
+% marine_action(RoomPid, M) ->
+%     cb_room:marine_action(RoomPid, M).
 
 
 notify(MyMarineList, Marines, Sock) when is_list(Marines) ->

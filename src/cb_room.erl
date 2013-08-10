@@ -5,7 +5,7 @@
 %% API
 -export([start_link/3,
          all_players/1,
-         marine_action/2,
+         % marine_action/2,
          marine_report/2]).
 
 %% gen_server callbacks
@@ -38,8 +38,8 @@ start_link(OwnerPid, RoomId, MapId) ->
 all_players(RoomPid) ->
     gen_server:call(RoomPid, all_players).
 
-marine_action(RoomPid, Marine) ->
-    gen_server:cast(RoomPid, {marine_action, Marine, self()}).
+% marine_action(RoomPid, Marine) ->
+%     gen_server:cast(RoomPid, {marine_action, Marine, self()}).
 
 marine_report(RoomPid, Report) ->
     gen_server:cast(RoomPid, {marine_report, Report}).
@@ -155,20 +155,20 @@ handle_cast({broadcast, Role, Marine}, #state{players=Players} = State) ->
 %     {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}};
 
 
-handle_cast({marine_action, #marine{status='Flares'} = M, CallerPid}, #state{players=Players} = State) ->
-    OtherPlayers = lists:delete(CallerPid, Players),
-    Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- OtherPlayers] ),
-    gen_server:cast(CallerPid, {broadcast, Marines}),
+% handle_cast({marine_action, #marine{status='Flares'} = M, CallerPid}, #state{players=Players} = State) ->
+%     OtherPlayers = lists:delete(CallerPid, Players),
+%     Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- OtherPlayers] ),
+%     gen_server:cast(CallerPid, {broadcast, Marines}),
 
-    %% notify other players that this marine's state
-    broadcast(M, OtherPlayers),
-    {noreply, State};
+%     %% notify other players that this marine's state
+%     broadcast(M, OtherPlayers),
+%     {noreply, State};
 
 
-handle_cast({marine_action, #marine{status='GunAttack'} = M, CallerPid}, #state{players=Players} = State) ->
-    %% other players will know this marine's state
-    broadcast(M, lists:delete(CallerPid, Players)),
-    {noreply, State};
+% handle_cast({marine_action, #marine{status='GunAttack'} = M, CallerPid}, #state{players=Players} = State) ->
+%     %% other players will know this marine's state
+%     broadcast(M, lists:delete(CallerPid, Players)),
+%     {noreply, State};
 
 
 handle_cast({marine_report, Report}, #state{players=Players} = State) ->
@@ -176,10 +176,24 @@ handle_cast({marine_report, Report}, #state{players=Players} = State) ->
     {noreply, State};
 
 
-handle_cast({flares_report, CallerPid}, #state{players=Players} = State) ->
+handle_cast({flares_report, CallerPid, M}, #state{players=Players} = State) ->
+    timer:sleep(50),
+    OtherPlayers = lists:delete(CallerPid, Players),
+    broadcast(M, OtherPlayers),
+    Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- OtherPlayers] ),
+    gen_server:cast(CallerPid, {broadcast, Marines}),
+    {noreply, State};
+
+
+handle_cast({flares2_report, CallerPid}, #state{players=Players} = State) ->
     timer:sleep(50),
     Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- lists:delete(CallerPid, Players)] ),
     gen_server:cast(CallerPid, {broadcast, Marines}),
+    {noreply, State};
+
+
+handle_cast({gunattack_report, CallerPid, M}, #state{players=Players} = State) ->
+    broadcast(M, lists:delete(CallerPid, Players)),
     {noreply, State}.
 
 
