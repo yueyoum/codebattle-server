@@ -50,7 +50,6 @@ start_link(Socket) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Socket]) ->
-    io:format("New Player~n"),
     <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
     random:seed({A, B, C}),
     {ok, #state{sock=Socket}, ?TIMEOUT}.
@@ -162,7 +161,11 @@ handle_cast({report,
             gen_server:cast(Room#room.pid, {to_observer, NewM}),
             State#state{marine = dict:store(Id2, NewM, MyMarines)}
     end,
-    {noreply, NewState};
+
+    case check_alive(NewState#state.marine) of
+        true -> {noreply, NewState};
+        false -> {stop, dead, NewState}
+    end;
 
 
 handle_cast({report,
@@ -216,9 +219,31 @@ handle_cast({report,
 
 
 handle_cast(startbattle, #state{sock=Sock} = State) ->
-    Msg = api_pb:encode_message({message, startbattle, undefined, undefined}),
+    Msg = api_pb:encode_message({message, startbattle, undefined, undefined, undefined}),
     ok = gen_tcp:send(Sock, Msg),
-    {noreply, State}.
+    {noreply, State};
+
+
+handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
+    io:format("player receive DOWN message, Reason = ~p~n", [Reason]),
+    Win =
+    case Reason of
+        dead -> true;
+        _ -> false
+    end,
+    ReasonString =
+    case Reason of
+        R when is_atom(R) -> atom_to_list(R);
+        R when is_list(R) -> R
+    end,
+    Msg = api_pb:encode_message({message,
+        endbattle,
+        undefined,
+        undefined,
+        {endbattle, ReasonString, Win}
+        }),
+    gen_tcp:send(Sock, Msg),
+    {stop, normal, State}.
 
 
 
@@ -250,11 +275,11 @@ handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
 
 handle_info({tcp_closed, _}, State) ->
     io:format("tcp closed~n"),
-    {stop, normal, State};
+    {stop, "Player Closed the connection, Exit", State};
 
 handle_info({tcp_error, _, Reason}, State) ->
     io:format("tcp error, reason: ~p~n", [Reason]),
-    {stop, Reason, State};
+    {stop, "Some player Connection Error, Exit", State};
 
 handle_info(timeout, State) ->
     io:format("timeout..."),
@@ -379,6 +404,7 @@ cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
     Msg = api_pb:encode_message({message,
         cmdresponse,
         {cmdresponse, RetCode, Cmd, undefined, undefined},
+        undefined,
         undefined}),
     ok = gen_tcp:send(Sock, Msg),
     ok.
@@ -390,6 +416,7 @@ cmdresponse(Sock, {Cmd, Value}) ->
             api_pb:encode_message({message,
                 cmdresponse,
                 {cmdresponse, 0, Cmd, Value, undefined},
+                undefined,
                 undefined
                 })
     end,
@@ -402,6 +429,12 @@ cmdresponse(Sock, {Cmd, Value}) ->
 
 % marine_action(RoomPid, M) ->
 %     cb_room:marine_action(RoomPid, M).
+
+check_alive(Marines) ->
+    lists:any(
+        fun(#marine{hp=Hp}) -> Hp > 0 end,
+        [V || {_, V} <- dict:to_list(Marines)]
+        ).
 
 
 notify(MyMarineList, Marines, Sock) when is_list(Marines) ->
@@ -416,7 +449,8 @@ notify(MyMarines, #marine{} = Marine, Sock) when is_list(MyMarines) ->
 notify_send(OwnData, OthersData, Sock) ->
     Msg = api_pb:encode_message({message, senceupdate,
         undefined,
-        {senceupdate, OwnData, OthersData}
+        {senceupdate, OwnData, OthersData},
+        undefined
         }),
     ok = gen_tcp:send(Sock, Msg).
 

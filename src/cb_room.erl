@@ -4,7 +4,7 @@
 
 %% API
 -export([start_link/3,
-         all_players/1,
+         % all_players/1,
          % marine_action/2,
          marine_report/2]).
 
@@ -18,7 +18,7 @@
 
 
 -include("../include/cb.hrl").
--record(state, {roomid, mapid, owner, observers=[], players=[], marines=dict:new()}).
+-record(state, {roomid, mapid, owner, observers=[], players=[], refs=sets:new(), marines=dict:new()}).
 
 %%%===================================================================
 %%% API
@@ -35,8 +35,8 @@ start_link(OwnerPid, RoomId, MapId) ->
     gen_server:start_link(?MODULE, [OwnerPid, RoomId, MapId], []).
 
 
-all_players(RoomPid) ->
-    gen_server:call(RoomPid, all_players).
+% all_players(RoomPid) ->
+%     gen_server:call(RoomPid, all_players).
 
 % marine_action(RoomPid, Marine) ->
 %     gen_server:cast(RoomPid, {marine_action, Marine, self()}).
@@ -62,7 +62,9 @@ marine_report(RoomPid, Report) ->
 %%--------------------------------------------------------------------
 init([OwnerPid, RoomId, MapId]) ->
     io:format("Create Room: roomid = ~p,  mapid = ~p~n", [RoomId, MapId]),
-    {ok, #state{roomid=RoomId, mapid=MapId, owner=OwnerPid, observers=[OwnerPid]}}.
+    Ref = erlang:monitor(process, OwnerPid),
+    R = sets:add_element(Ref, sets:new()),
+    {ok, #state{roomid=RoomId, mapid=MapId, owner=OwnerPid, observers=[OwnerPid], refs=R}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -78,12 +80,13 @@ init([OwnerPid, RoomId, MapId]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({join, ai, PlayerPid}, _From, #state{players=Players} = State) ->
+handle_call({join, ai, PlayerPid}, _From, #state{players=Players, refs=R} = State) ->
     Limit = 2,
-    NewPlayers =
+    {NewPlayers, NewRefs} =
     case length(Players) - (Limit - 1) of
         N when N =:= 0 ->
             %% send startbattle message
+            Ref = erlang:monitor(process, PlayerPid),
             Ps = [PlayerPid | Players],
             lists:foreach(
                 fun(P) ->
@@ -91,21 +94,22 @@ handle_call({join, ai, PlayerPid}, _From, #state{players=Players} = State) ->
                 end,
                 Ps
                 ),
-            Ps;
+            {Ps, sets:add_element(Ref, R)};
         N when N < 0 ->
-            [PlayerPid | Players];
+            Ref = erlang:monitor(process, PlayerPid),
+            {[PlayerPid | Players], sets:add_element(Ref, R)};
         N when N > 0 ->
             %% room full
             io:format("cannot join room, full~n"),
-            Players
+            {Players, R}
     end,
-    {reply, ok, State#state{players=NewPlayers}};
+    {reply, ok, State#state{players=NewPlayers, refs=NewRefs}};
 
 handle_call({join, ob, PlayerPid}, _From, #state{observers=Observers} = State) ->
-    {reply, ok, State#state{observers=[PlayerPid | Observers]}};
+    {reply, ok, State#state{observers=[PlayerPid | Observers]}}.
 
-handle_call(all_players, _From, #state{players=Players} = State) ->
-    {reply, {ok, Players}, State}.
+% handle_call(all_players, _From, #state{players=Players} = State) ->
+%     {reply, {ok, Players}, State}.
 
 % handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = State) ->
 %     Reply = dict:find(MarineId, Marines),
@@ -207,8 +211,17 @@ handle_cast({gunattack_report, CallerPid, M}, #state{players=Players} = State) -
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(_Info, State) ->
-    {noreply, State}.
+handle_info({'DOWN', Ref, process, Pid, Reason}, #state{players=Players, observers=Ob, refs=R} = State) ->
+    case sets:is_element(Ref, R) of
+        false -> ok;
+        true -> broadcast(Reason, lists:delete(Pid, Players) ++ Ob, 'DOWN')
+    end,
+
+    lists:foreach(
+        fun(Refs) -> erlang:demonitor(Refs, [flush]) end,
+        sets:to_list(R)
+        ),
+    {stop, normal, State}.
 
 %%--------------------------------------------------------------------
 %% @private

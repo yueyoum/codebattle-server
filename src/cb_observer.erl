@@ -84,9 +84,11 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({broadcast, Marine}, #state{sock=Sock} = State) ->
     ok = notify(Marine, Sock),
-    {noreply, State}.
+    {noreply, State};
 
-
+handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
+    io:format("observer receive DOWN message, Reason = ~p~n", [Reason]),
+    {stop, normal, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -116,15 +118,15 @@ handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
 
 handle_info({tcp_closed, _}, State) ->
     io:format("tcp closed~n"),
-    {stop, normal, State};
+    {stop, "Room Owner Lost Connection", State};
 
 handle_info({tcp_error, _, Reason}, State) ->
     io:format("tcp error, reason: ~p~n", [Reason]),
-    {stop, Reason, State};
+    {stop, "Room Owner Lost Connection", State};
 
 handle_info(timeout, State) ->
     io:format("timeout..."),
-    {stop, normal, State}.
+    {stop, "Room Owner Lost Connection", State}.
 
 
 

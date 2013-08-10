@@ -7,3 +7,7 @@
     targetposition,
     gunlasttime={{2013, 8, 9}, {0, 0, 0}},
     flares=10}).
+
+
+-define(MAPX, 50).
+-define(MAPZ, 50).

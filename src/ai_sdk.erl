@@ -196,11 +196,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 parse_data(Data, State) ->
-    {message, MsgType, CmdResponse, SenceUpdate} = api_pb:decode_message(Data),
+    {message, MsgType, CmdResponse, SenceUpdate, EndBattle} = api_pb:decode_message(Data),
     case MsgType of
         cmdresponse -> cmdresponse(CmdResponse, State);
         senceupdate -> senceupdate(SenceUpdate, State);
-        startbattle -> startbattle(State)
+        startbattle -> startbattle(State);
+        endbattle -> endbattle(EndBattle, State)
     end.
 
 
@@ -217,13 +218,18 @@ cmdresponse({cmdresponse, Ret, Cmd, _, _}, State) ->
     {ok, State}.
 
 senceupdate({senceupdate, Own, Others} = Data, #state{worker=Worker} = State) ->
-    io:format("SenceUpdate, at ~p~n", [calendar:now_to_datetime(now())]),
-    io:format("Own = ~p~n", [Own]),
-    io:format("Others = ~p~n", [Others]),
+    % io:format("SenceUpdate, at ~p~n", [calendar:now_to_datetime(now())]),
+    % io:format("Own = ~p~n", [Own]),
+    % io:format("Others = ~p~n", [Others]),
     gen_server:cast(Worker, Data),
     {ok, State}.
 
 startbattle(#state{worker=Worker} = State) ->
     io:format("startbattle!~n"),
     gen_server:cast(Worker, startbattle),
+    {ok, State}.
+
+endbattle(EndBattle, #state{worker=Worker} = State) ->
+    io:format("endbattle~n"),
+    gen_server:cast(Worker, EndBattle),
     {ok, State}.
