@@ -126,10 +126,16 @@ handle_call({join, ob, PlayerPid}, _From, #state{observers=Observers} = State) -
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({to_observer, Marine}, #state{observers=Observers} = State) ->
-    broadcast(Marine, Observers),
+handle_cast({to_observer, Data}, #state{observers=Observers} = State) ->
+    broadcast(Data, Observers),
     {noreply, State};
 
+handle_cast({to_observer, createmarine, Marine, Color}, #state{observers=Observers} = State) ->
+    lists:foreach(
+        fun(Ob) -> gen_server:cast(Ob, {createmarine, Marine, Color}) end,
+        Observers
+        ),
+    {noreply, State};
 
 handle_cast({broadcast, Data}, #state{players=Players} = State) ->
     broadcast(Data, Players),

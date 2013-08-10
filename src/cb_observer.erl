@@ -82,9 +82,26 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
+handle_cast({createmarine, Marine, Color}, #state{sock=Sock} = State) ->
+    Marines = [utils:marine_record_to_proto(M) || M <- Marine],
+    C =
+    case Color of
+        undefined -> "red";
+        Co -> Co
+    end,
+
+    Msg = observer_pb:encode_message({message, createmarine,
+        undefined,
+        undefined,
+        {createmarine, C, Marines}
+        }),
+    ok = gen_tcp:send(Sock, Msg),
+    {noreply, State};
+
 handle_cast({broadcast, Marine}, #state{sock=Sock} = State) ->
     ok = notify(Marine, Sock),
     {noreply, State};
+
 
 handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
     io:format("observer receive DOWN message, Reason = ~p~n", [Reason]),
@@ -191,6 +208,7 @@ cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
     Msg = observer_pb:encode_message({message,
         cmdresponse,
         {cmdresponse, RetCode, Cmd, undefined, undefined},
+        undefined,
         undefined}),
     ok = gen_tcp:send(Sock, Msg),
     ok.
@@ -202,12 +220,14 @@ cmdresponse(Sock, {Cmd, Value}) ->
             observer_pb:encode_message({message,
                 cmdresponse,
                 {cmdresponse, 0, Cmd, Value, undefined},
+                undefined,
                 undefined
                 });
         joinroom ->
             observer_pb:encode_message({message,
                 cmdresponse,
                 {cmdresponse, 0, Cmd, undefined, Value},
+                undefined,
                 undefined
                 })
     end,
@@ -220,10 +240,10 @@ notify(Marines, Sock) when is_list(Marines) ->
     Data = [utils:marine_record_to_proto(M) || M <- Marines],
     Msg = observer_pb:encode_message({message, senceupdate,
         undefined,
-        {senceupdate, Data}
+        {senceupdate, Data},
+        undefined
         }),
-    ok = gen_tcp:send(Sock, Msg),
-    ok;
+    ok = gen_tcp:send(Sock, Msg);
 
 notify(#marine{} = Marine, Sock) ->
     notify([Marine], Sock).

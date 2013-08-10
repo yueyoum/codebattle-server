@@ -4,6 +4,7 @@
 
 %% API
 -export([start_link/1,
+         start_link/2,
          own_marine_ids/1,
          other_marine_ids/1,
          call_move/4,
@@ -44,7 +45,10 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link(RoomId) ->
-    gen_server:start_link(?MODULE, [RoomId], []).
+    gen_server:start_link(?MODULE, [RoomId, "red"], []).
+
+start_link(RoomId, Color) ->
+    gen_server:start_link(?MODULE, [RoomId, Color], []).
 
 own_marine_ids(Pid) ->
     gen_server:call(Pid, own_marine_ids).
@@ -76,7 +80,7 @@ call_gunshoot(Pid, MarineId, X, Z) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([RoomId]) ->
+init([RoomId, Color]) ->
     <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
     random:seed({A, B, C}),
     {ok, SdkPid} = ai_sdk:start_link(self()),
@@ -87,7 +91,7 @@ init([RoomId]) ->
 
     %% an ai must join a room before any action,
     %% so It's ok that we do this in init function.
-    ok = ai_sdk:joinroom(SdkPid, RoomId),
+    ok = ai_sdk:joinroom(SdkPid, RoomId, Color),
     {ok, #state{sdk=SdkPid}}.
 
 

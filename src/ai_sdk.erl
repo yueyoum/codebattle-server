@@ -5,7 +5,7 @@
 %% API
 -export([start_link/1,
          connect/3,
-         joinroom/2,
+         joinroom/3,
          marineoperate/3,
          marineoperate/5]).
 
@@ -37,8 +37,8 @@ start_link(WorkerPid) ->
 connect(Pid, IP, Port) ->
     gen_server:call(Pid, {connect, IP, Port}).
 
-joinroom(Pid, RoomId) ->
-    gen_server:call(Pid, {joinroom, RoomId}).
+joinroom(Pid, RoomId, Color) ->
+    gen_server:call(Pid, {joinroom, RoomId, Color}).
 
 marineoperate(Pid, MarineId, Status) ->
     gen_server:call(Pid, {marineoperate, MarineId, Status}).
@@ -84,9 +84,9 @@ handle_call({connect, IP, Port}, _From, State) ->
 
     {reply, {ok, Sock}, State#state{sock=Sock}};
 
-handle_call({joinroom, RoomId}, _From, #state{sock=Sock} = State) ->
+handle_call({joinroom, RoomId, Color}, _From, #state{sock=Sock} = State) ->
     JoinroomRequest = api_pb:encode_cmd({cmd, joinroom,
-        {joinroom, RoomId},
+        {joinroom, RoomId, Color},
         undefined,
         undefined
         }),

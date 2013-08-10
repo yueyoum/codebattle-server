@@ -317,7 +317,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
+joinroom({joinroom, RoomId, Color}, #state{sock=Sock, room=Room} = State) ->
     case Room#room.id of
         undefined ->
             case cb_room_manager:joinroom(self(), RoomId) of
@@ -330,8 +330,7 @@ joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
 
                     Fun = fun(M, D) -> dict:store(M#marine.id, M, D) end,
                     MyMarines = lists:foldl(Fun, dict:new(), RandomMarines),
-                    % gen_server:cast(RoomPid, {new_marine, dict:fetch_keys(MyMarines), self()}),
-                    gen_server:cast(RoomPid, {to_observer, RandomMarines}),
+                    gen_server:cast(RoomPid, {to_observer, createmarine, RandomMarines, Color}),
 
                     State#state{marine=MyMarines, room=#room{id=RoomId, pid=RoomPid}};
                 notfound ->
