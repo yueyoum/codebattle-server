@@ -14,9 +14,10 @@
          terminate/2,
          code_change/3]).
 
-
 -include("../include/cb.hrl").
 -record(state, {roomid, mapid, owner, observers=[], players=[], refs=sets:new(), marines=dict:new()}).
+
+-define(BATTLETIME, 1000 * 600).
 
 %%%===================================================================
 %%% API
@@ -84,6 +85,7 @@ handle_call({join, ai, PlayerPid}, _From, #state{players=Players, refs=R} = Stat
                 end,
                 Ps
                 ),
+            timer:send_after(?BATTLETIME, self(), endbattle),
             {Ps, sets:add_element(Ref, R)};
         N when N < 0 ->
             Ref = erlang:monitor(process, PlayerPid),
@@ -115,6 +117,7 @@ handle_call({join, ob, PlayerPid}, _From, #state{observers=Observers} = State) -
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+
 handle_cast({to_observer, Data}, #state{observers=Observers} = State) ->
     broadcast(Data, Observers),
     {noreply, State};
@@ -174,17 +177,28 @@ handle_cast({gunattack_report, CallerPid, M}, #state{players=Players} = State) -
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'DOWN', Ref, process, Pid, Reason}, #state{players=Players, observers=Ob, refs=R} = State) ->
-    case sets:is_element(Ref, R) of
-        false -> ok;
-        true -> broadcast(Reason, lists:delete(Pid, Players) ++ Ob, 'DOWN')
-    end,
-
+handle_info(endbattle, #state{refs=Refs, observers=Ob, players=Players} = State) ->
     lists:foreach(
-        fun(Refs) -> erlang:demonitor(Refs, [flush]) end,
-        sets:to_list(R)
+        fun(R) -> erlang:demonitor(R, [flush]) end,
+        sets:to_list(Refs)
         ),
-    {stop, normal, State}.
+
+    broadcast("Battle Time is expired", Players ++ Ob, 'DOWN'),
+    {stop, normal, State};
+
+
+handle_info({'DOWN', Ref, process, Pid, Reason}, #state{players=Players, observers=Ob, refs=Refs} = State) ->
+    case sets:is_element(Ref, Refs) of
+        false -> {noreply, State};
+        true -> 
+            lists:foreach(
+                fun(R) -> erlang:demonitor(R, [flush]) end,
+                sets:to_list(Refs)
+                ),
+            broadcast(Reason, lists:delete(Pid, Players) ++ Ob, 'DOWN'),
+            {stop, normal, State}
+    end.
+
 
 %%--------------------------------------------------------------------
 %% @private

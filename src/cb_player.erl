@@ -225,16 +225,20 @@ handle_cast(startbattle, #state{sock=Sock} = State) ->
 
 
 handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
-    io:format("player receive DOWN message, Reason = ~p~n", [Reason]),
     Win =
     case Reason of
         dead -> true;
         _ -> false
     end,
+
     ReasonString =
-    case Reason of
-        R when is_atom(R) -> atom_to_list(R);
-        R when is_list(R) -> R
+    case Win of
+        true -> "Opponent Dead";
+        false ->
+            case Reason of
+                R when is_atom(R) -> atom_to_list(R);
+                R when is_list(R) -> R
+            end
     end,
     Msg = api_pb:encode_message({message,
         endbattle,

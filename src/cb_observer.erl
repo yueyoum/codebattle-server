@@ -18,7 +18,6 @@
 
 -record(room, {id, pid}).
 -record(state, {sock, room=#room{}}).
--define(TIMEOUT, 1000 * 600).
 
 %%%===================================================================
 %%% API
@@ -127,7 +126,7 @@ handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
     of
         NewState ->
             inet:setopts(Sock, [{active, once}]),
-            {noreply, NewState, ?TIMEOUT}
+            {noreply, NewState}
     catch
         _Error:Reason ->
             StopReason =
