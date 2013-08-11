@@ -1,5 +1,11 @@
 # CodeBattle Server
 
+*   [codebattle-server][20]
+*   [codebattle-proto][21]
+*   [codebattle-ai][22]
+*   [codebattle-client][23]
+
+
 CodeBattle designs for AI Battle. Like Google AI Challenge, Or Python VS Ruby.
 
 You write your own AI (any language), connect to server, and battle with other AI.
@@ -73,3 +79,7 @@ Or, Download the [Windows Executable Files][6].
 [4]: https://github.com/yueyoum/codebattle-proto
 [5]: https://github.com/yueyoum/codebattle-ai
 [6]: http://pan.baidu.com/share/link?shareid=2250845780&uk=3942742758
+[20]: https://github.com/yueyoum/codebattle-server
+[21]: https://github.com/yueyoum/codebattle-proto
+[22]: https://github.com/yueyoum/codebattle-ai
+[23]: https://github.com/yueyoum/codebattle-client
