@@ -132,7 +132,7 @@ handle_cast({report,
      {marinestatus, Id2, Status2, {vector2, X2, Z2}},
      _,
      _}},
-     #state{marine=MyMarines, room=Room} = State) ->
+     #state{sock=Sock, marine=MyMarines, room=Room} = State) ->
 
     NewState =
     case dict:is_key(Id2, MyMarines) of
@@ -164,7 +164,15 @@ handle_cast({report,
 
     case check_alive(NewState#state.marine) of
         true -> {noreply, NewState};
-        false -> {stop, dead, NewState}
+        false -> 
+            Msg = api_pb:encode_message({message,
+                endbattle,
+                undefined,
+                undefined,
+                {endbattle, "Own Marines All Dead", false}
+                }),
+            gen_tcp:send(Sock, Msg),
+            {stop, dead, NewState}
     end;
 
 
@@ -282,7 +290,7 @@ handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
                 {codebattle, Operate, C}  -> {Operate, C};
                 _ -> {undefined, 10}
             end,
-            cmdresponse(Ope, ErrorCode),
+            cmdresponse(Sock, Ope, ErrorCode),
             {noreply, State, ?TIMEOUT}
     end;
 

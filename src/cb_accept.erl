@@ -27,7 +27,7 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-    Port = application:get_env(codebattle, port, 8888),
+    Port = application:get_env(codebattle, aiport, 8888),
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Port], []).
 
 %%%===================================================================
