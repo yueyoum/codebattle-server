@@ -92,15 +92,18 @@ handle_call({createroom, {PlayerPid, MapId}}, _From, State) ->
 
 
 handle_call({joinroom, {PlayerPid, RoomId, Token}}, _From, State) ->
+    Reply =
     case dict:find(RoomId, State) of
         {ok, #room{pid=RoomPid, token=Token}} ->
             ok = gen_server:call(RoomPid, {join, ob, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
+            {ok, {RoomId, RoomPid}};
         {ok, #room{pid=RoomPid}} ->
-            ok = gen_server:call(RoomPid, {join, ai, PlayerPid}),
-            Reply = {ok, {RoomId, RoomPid}};
+            case gen_server:call(RoomPid, {join, ai, PlayerPid}) of
+                ok -> {ok, {RoomId, RoomPid}};
+                full -> full
+            end;
         error ->
-            Reply = notfound
+            notfound
     end,
     {reply, Reply, State}.
 

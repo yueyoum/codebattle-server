@@ -51,7 +51,6 @@ start_link(Socket) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Socket]) ->
-    io:format("cb_observer: New Observer~n"),
     {ok, #state{sock=Socket}, ?TIMEOUT}.
 
 %%--------------------------------------------------------------------
@@ -103,8 +102,7 @@ handle_cast({broadcast, Marine}, #state{sock=Sock} = State) ->
     {noreply, State};
 
 
-handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
-    io:format("observer receive DOWN message, Reason = ~p~n", [Reason]),
+handle_cast({'DOWN', _Reason}, State) ->
     {stop, normal, State}.
 
 %%--------------------------------------------------------------------
@@ -119,30 +117,35 @@ handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
 %%--------------------------------------------------------------------
 
 handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
-    {cmd, Cmd, Crm, Jrm, Mrt} = observer_pb:decode_cmd(Data),
-    io:format("Observer receive: ~p, ~p, ~p, ~p~n", [Cmd, Crm, Jrm, Mrt]),
-
-    NewState =
-    case Cmd of
-        createroom -> createroom(Crm, State);
-        joinroom -> joinroom(Jrm, State);
-        marinereport -> marinereport(Mrt, State)
-    end,
-
-    inet:setopts(Sock, [{active, once}]),
-    {noreply, NewState, ?TIMEOUT};
+    try
+        {cmd, Cmd, Crm, Jrm, Mrt} = observer_pb:decode_cmd(Data),
+        case Cmd of
+            createroom -> createroom(Crm, State);
+            joinroom -> joinroom(Jrm, State);
+            marinereport -> marinereport(Mrt, State)
+        end
+    of
+        NewState ->
+            inet:setopts(Sock, [{active, once}]),
+            {noreply, NewState, ?TIMEOUT}
+    catch
+        _Error:Reason ->
+            StopReason =
+            case Reason of
+                {codebattle, R} -> R;
+                _ -> "Invalid Message"
+            end,
+            {stop, StopReason, State}
+    end;
 
 
 handle_info({tcp_closed, _}, State) ->
-    io:format("tcp closed~n"),
     {stop, "Room Owner Lost Connection", State};
 
-handle_info({tcp_error, _, Reason}, State) ->
-    io:format("tcp error, reason: ~p~n", [Reason]),
+handle_info({tcp_error, _, _Reason}, State) ->
     {stop, "Room Owner Lost Connection", State};
 
 handle_info(timeout, State) ->
-    io:format("timeout..."),
     {stop, "Room Owner Lost Connection", State}.
 
 
@@ -188,9 +191,9 @@ createroom({createroom, MapId}, #state{sock=Sock, room=Room} = State) ->
             State
     end.
 
-joinroom({joinroom, RoomId}, #state{sock=Sock, room=Room} = State) ->
-    io:format("Observer joinroom NOT implemented!~n"),
-    State.
+joinroom(_Data, _State) ->
+    %% NOT implemented
+    throw({codebattle, "This feature not available"}).
 
 
 marinereport(Report, #state{room=Room} = State) ->
@@ -210,8 +213,7 @@ cmdresponse(Sock, Cmd, RetCode) when RetCode =/= 0 ->
         {cmdresponse, RetCode, Cmd, undefined, undefined},
         undefined,
         undefined}),
-    ok = gen_tcp:send(Sock, Msg),
-    ok.
+    ok = gen_tcp:send(Sock, Msg).
 
 cmdresponse(Sock, {Cmd, Value}) ->
     Msg =
@@ -231,9 +233,7 @@ cmdresponse(Sock, {Cmd, Value}) ->
                 undefined
                 })
     end,
-    ok = gen_tcp:send(Sock, Msg),
-    ok.
-
+    ok = gen_tcp:send(Sock, Msg).
 
 
 notify(Marines, Sock) when is_list(Marines) ->

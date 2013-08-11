@@ -63,8 +63,6 @@ can_make_gun_shoot(GunLastTime) ->
         GunLastTime,
         calendar:now_to_datetime(now())
         ),
-    io:format("can_make_gun_shoot, GunLastTime = ~p~n", [GunLastTime]),
-    io:format("~p, ~p, ~p, ~p~n", [A, H, M, S]),
 
     case A of
         Day when Day > 0 -> true;

@@ -9,5 +9,7 @@
     flares=10}).
 
 
+-define(PLAYERNUMS, 2).
+-define(MARINENUMS, 2).
 -define(MAPX, 50).
 -define(MAPZ, 50).

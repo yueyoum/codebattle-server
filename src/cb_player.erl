@@ -16,7 +16,7 @@
 -include("../include/cb.hrl").
 
 -record(room, {id, pid}).
--record(state, {sock, marine=dict:new(), room=#room{}}).
+-record(state, {sock, marine=dict:new(), room=#room{}, startbattle=false}).
 -define(TIMEOUT, 1000 * 600).
 
 %%%===================================================================
@@ -221,7 +221,7 @@ handle_cast({report,
 handle_cast(startbattle, #state{sock=Sock} = State) ->
     Msg = api_pb:encode_message({message, startbattle, undefined, undefined, undefined}),
     ok = gen_tcp:send(Sock, Msg),
-    {noreply, State};
+    {noreply, State#state{startbattle=true}};
 
 
 handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
@@ -259,31 +259,37 @@ handle_cast({'DOWN', Reason}, #state{sock=Sock} = State) ->
 %%--------------------------------------------------------------------
 
 handle_info({tcp, Sock, Data}, State) when Sock =:= State#state.sock ->
-    {cmd, Cmd, Jrm, Cme, Opt} = api_pb:decode_cmd(Data),
-    io:format("Player receive: ~p, ~p, ~p, ~p~n", [Cmd, Jrm, Cme, Opt]),
-
-    NewState =
-    case Cmd of
-        joinroom -> joinroom(Jrm, State);
-        createmarine -> createmarine(Cme, State);
-        marineoperate -> marineoperate(Opt, State)
-    end,
-
-    inet:setopts(Sock, [{active, once}]),
-    {noreply, NewState, ?TIMEOUT};
-
+    try
+        {cmd, Cmd, Jrm, Cme, Opt} = api_pb:decode_cmd(Data),
+        case Cmd of
+            joinroom -> joinroom(Jrm, State);
+            createmarine -> createmarine(Cme, State);
+            marineoperate -> marineoperate(Opt, State)
+        end
+    of
+        NewState ->
+            inet:setopts(Sock, [{active, once}]),
+            {noreply, NewState, ?TIMEOUT}
+    catch
+        _Error:Reason ->
+            {Ope, ErrorCode} =
+            case Reason of
+                {codebattle, C} -> {undefined, C};
+                {codebattle, Operate, C}  -> {Operate, C};
+                _ -> {undefined, 10}
+            end,
+            cmdresponse(Ope, ErrorCode),
+            {noreply, State, ?TIMEOUT}
+    end;
 
 handle_info({tcp_closed, _}, State) ->
-    io:format("tcp closed~n"),
-    {stop, "Player Closed the connection, Exit", State};
+    {stop, "Some Player Lost Connection", State};
 
-handle_info({tcp_error, _, Reason}, State) ->
-    io:format("tcp error, reason: ~p~n", [Reason]),
-    {stop, "Some player Connection Error, Exit", State};
+handle_info({tcp_error, _, _Reason}, State) ->
+    {stop, "Some Player Lost Connection", State};
 
 handle_info(timeout, State) ->
-    io:format("timeout..."),
-    {stop, normal, State}.
+    {stop, "Some Player Lost Connection", State}.
 
 
 
@@ -322,10 +328,10 @@ joinroom({joinroom, RoomId, Color}, #state{sock=Sock, room=Room} = State) ->
         undefined ->
             case cb_room_manager:joinroom(self(), RoomId) of
                 {ok, {RoomId, RoomPid}} ->
-                    RandomMarines = create_random_marines_record(2, 50, 50),
+                    RandomMarines = create_random_marines_record(?MARINENUMS, ?MAPX, ?MAPZ),
                     cmdresponse(Sock, {joinroom, {joinroomresponse, 
                                                   RoomId,
-                                                  {vector2int, 50, 50},
+                                                  {vector2int, ?MAPX, ?MAPZ},
                                                   [utils:marine_record_to_proto(M) || M <- RandomMarines]}}),
 
                     Fun = fun(M, D) -> dict:store(M#marine.id, M, D) end,
@@ -333,27 +339,34 @@ joinroom({joinroom, RoomId, Color}, #state{sock=Sock, room=Room} = State) ->
                     gen_server:cast(RoomPid, {to_observer, createmarine, RandomMarines, Color}),
 
                     State#state{marine=MyMarines, room=#room{id=RoomId, pid=RoomPid}};
+                full ->
+                    cmdresponse(Sock, joinroom, 15),
+                    State;
                 notfound ->
-                    cmdresponse(Sock, joinroom, 3),
+                    cmdresponse(Sock, joinroom, 14),
                     State
             end;
         _ ->
-            cmdresponse(Sock, joinroom, 2),
+            cmdresponse(Sock, joinroom, 13),
             State
     end.
 
 
 
 createmarine(_, State) ->
-    io:format("cb_player, createmarine not supported!~n"),
+    throw({codebattle, 11}),
     State.
 
 
+marineoperate(_, #state{sock=Sock, startbattle=false} = State) ->
+    cmdresponse(Sock, marineoperate, 25),
+    State;
+
 marineoperate({marineoperate, Id, Status, TargetPosition},
-    #state{sock=Sock, marine=OwnMarines, room=Room} = State) ->
+    #state{sock=Sock, marine=OwnMarines, room=Room, startbattle=true} = State) ->
     case Room#room.pid of
         undefined ->
-            cmdresponse(Sock, marineoperate, 10),
+            cmdresponse(Sock, marineoperate, 19),
             State;
         RoomPid ->
             case dict:find(Id, OwnMarines) of
@@ -363,35 +376,36 @@ marineoperate({marineoperate, Id, Status, TargetPosition},
                             NewTargetPosition =
                             case TargetPosition of
                                 undefined -> undefined;
-                                {vector2, Tx, Tz} -> #vector2{x=Tx, z=Tz}
+                                {vector2, Tx, Tz} when Tx >= 0, Tx =< ?MAPX, Tz >= 0, Tz =< ?MAPZ-> 
+                                    #vector2{x=Tx, z=Tz};
+                                _ -> throw({codebattle, marineoperate, 24})
                             end,
                             NewM2 = NewM#marine{status=Status, targetposition=NewTargetPosition},
                             gen_server:cast(RoomPid, {to_observer, NewM2}),
-                            % marine_action(RoomPid, NewM2),
                             State#state{marine=dict:store(Id, NewM2, OwnMarines)};
                         {error, ErrorCode} ->
                             cmdresponse(Sock, marineoperate, ErrorCode),
                             State
                     end;
                 error ->
-                    cmdresponse(Sock, marineoperate, 11),
+                    cmdresponse(Sock, marineoperate, 20),
                     State
             end
     end.
 
 
 marine_status_check(#marine{status='Dead'}, _) ->
-    {error, 30};
+    {error, 21};
 
 marine_status_check(#marine{gunlasttime=T} = M, 'GunAttack') ->
     case utils:can_make_gun_shoot(T) of
-        false -> {error, 20};
+        false -> {error, 22};
         true -> {ok, M#marine{gunlasttime=calendar:now_to_datetime(now())}}
     end;
 
 marine_status_check(#marine{flares=FlaresAmount} = M, 'Flares') ->
     case FlaresAmount > 0 of
-        false -> {error, 21};
+        false -> {error, 23};
         true -> {ok, M#marine{flares=FlaresAmount-1}}
     end;
 
@@ -423,12 +437,6 @@ cmdresponse(Sock, {Cmd, Value}) ->
     ok.
 
 
-% marine_action(_, #marine{status=Status}) when Status =:= 'Idle'; Status =:= 'Run'; Status =:= 'Dead' ->
-%     ok;
-
-% marine_action(RoomPid, M) ->
-%     cb_room:marine_action(RoomPid, M).
-
 check_alive(Marines) ->
     lists:any(
         fun(#marine{hp=Hp}) -> Hp > 0 end,
@@ -459,6 +467,3 @@ create_random_marines_record(Num, Xmax, Zmax) ->
         utils:random_int(),
         random:uniform(Xmax),
         random:uniform(Zmax)) || _ <- lists:seq(1, Num)].
-
-create_random_marines_proto(Num, Xmax, Zmax) ->
-    [utils:marine_record_to_proto(M) || M <- create_random_marines_record(Num, Xmax, Zmax)].

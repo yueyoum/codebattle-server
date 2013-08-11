@@ -4,8 +4,6 @@
 
 %% API
 -export([start_link/3,
-         % all_players/1,
-         % marine_action/2,
          marine_report/2]).
 
 %% gen_server callbacks
@@ -34,13 +32,6 @@
 start_link(OwnerPid, RoomId, MapId) ->
     gen_server:start_link(?MODULE, [OwnerPid, RoomId, MapId], []).
 
-
-% all_players(RoomPid) ->
-%     gen_server:call(RoomPid, all_players).
-
-% marine_action(RoomPid, Marine) ->
-%     gen_server:cast(RoomPid, {marine_action, Marine, self()}).
-
 marine_report(RoomPid, Report) ->
     gen_server:cast(RoomPid, {marine_report, Report}).
 
@@ -61,7 +52,7 @@ marine_report(RoomPid, Report) ->
 %% @end
 %%--------------------------------------------------------------------
 init([OwnerPid, RoomId, MapId]) ->
-    io:format("Create Room: roomid = ~p,  mapid = ~p~n", [RoomId, MapId]),
+    % io:format("Create Room: roomid = ~p,  mapid = ~p~n", [RoomId, MapId]),
     Ref = erlang:monitor(process, OwnerPid),
     R = sets:add_element(Ref, sets:new()),
     {ok, #state{roomid=RoomId, mapid=MapId, owner=OwnerPid, observers=[OwnerPid], refs=R}}.
@@ -81,9 +72,8 @@ init([OwnerPid, RoomId, MapId]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({join, ai, PlayerPid}, _From, #state{players=Players, refs=R} = State) ->
-    Limit = 2,
     {NewPlayers, NewRefs} =
-    case length(Players) - (Limit - 1) of
+    case length(Players) - (?PLAYERNUMS - 1) of
         N when N =:= 0 ->
             %% send startbattle message
             Ref = erlang:monitor(process, PlayerPid),
@@ -100,20 +90,19 @@ handle_call({join, ai, PlayerPid}, _From, #state{players=Players, refs=R} = Stat
             {[PlayerPid | Players], sets:add_element(Ref, R)};
         N when N > 0 ->
             %% room full
-            io:format("cannot join room, full~n"),
             {Players, R}
     end,
-    {reply, ok, State#state{players=NewPlayers, refs=NewRefs}};
+
+    Reply =
+    case length(NewPlayers) > length(Players) of
+        true -> ok;
+        false -> full
+    end,
+
+    {reply, Reply, State#state{players=NewPlayers, refs=NewRefs}};
 
 handle_call({join, ob, PlayerPid}, _From, #state{observers=Observers} = State) ->
     {reply, ok, State#state{observers=[PlayerPid | Observers]}}.
-
-% handle_call(all_players, _From, #state{players=Players} = State) ->
-%     {reply, {ok, Players}, State}.
-
-% handle_call({get_marine_owner_pid, MarineId}, _From, #state{marines=Marines} = State) ->
-%     Reply = dict:find(MarineId, Marines),
-%     {reply, Reply, State}.
 
 
 %%--------------------------------------------------------------------
@@ -141,44 +130,12 @@ handle_cast({broadcast, Data}, #state{players=Players} = State) ->
     broadcast(Data, Players),
     {noreply, State};
 
-% handle_cast({broadcast, Marine, IgnorePid}, #state{players=Players} = State) ->
-%     io:format("cb_room broadcasting messages, players = ~p, IgnorePid = ~p~n", [Players, IgnorePid]),
-%     broadcast(Marine, lists:delete(IgnorePid, Players)),
-%     {noreply, State};
-
 handle_cast({broadcast, Role, Marine}, #state{players=Players} = State) ->
     lists:foreach(
         fun(P) -> gen_server:cast(P, {broadcast, Role, Marine}) end,
         Players
         ),
     {noreply, State};
-
-
-% handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) when is_list(MarineId) ->
-%     Fun = fun(Mid, Ms) ->
-%         dict:store(Mid, PlayerPid, Ms)
-%     end,
-%     NewMarines = lists:foldl(Fun, Marines, MarineId),
-%     {noreply, State#state{marines=NewMarines}};
-
-% handle_cast({new_marine, MarineId, PlayerPid}, #state{marines=Marines} = State) ->
-%     {noreply, State#state{marines=dict:store(MarineId, PlayerPid, Marines)}};
-
-
-% handle_cast({marine_action, #marine{status='Flares'} = M, CallerPid}, #state{players=Players} = State) ->
-%     OtherPlayers = lists:delete(CallerPid, Players),
-%     Marines = lists:flatten( [gen_server:call(P, all_marines) || P <- OtherPlayers] ),
-%     gen_server:cast(CallerPid, {broadcast, Marines}),
-
-%     %% notify other players that this marine's state
-%     broadcast(M, OtherPlayers),
-%     {noreply, State};
-
-
-% handle_cast({marine_action, #marine{status='GunAttack'} = M, CallerPid}, #state{players=Players} = State) ->
-%     %% other players will know this marine's state
-%     broadcast(M, lists:delete(CallerPid, Players)),
-%     {noreply, State};
 
 
 handle_cast({marine_report, Report}, #state{players=Players} = State) ->
