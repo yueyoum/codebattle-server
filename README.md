@@ -5,6 +5,7 @@
 *   [codebattle-ai][22]
 *   [codebattle-client][23]
 
+**ShowCase**  [youtube][25], [youku][24]
 
 CodeBattle designs for AI Battle. Like Google AI Challenge, Or Python VS Ruby.
 
@@ -20,14 +21,14 @@ There is an official server running at:
 The [client][1] as observer, to display the battle scene.
 
 AI cannot createroom.
-createroom action are done by client.
+createroom action is done by client.
 
 ![clientstart][2]
 
 In client start interface, Ip is the server Ip, Port is the obPort.
 **obPort** just used for the GUI Client.
 
-Then client create room, if everything goes well, you will see the **roomid** at the top of the battle scene.
+Then GUI client create room, if everything goes well, you will see the **roomid** at the top of the battle scene.
 
 Your AI will using this roomid to identify which room will join in.
 Two AI join the same room, then they can battle each other.
@@ -48,12 +49,20 @@ And I will be happy if you send pull request to improve the Server.
 
 1. git clone & cd project folder
 2. git submodule init
-3. git submodule foreach git pull
+3. git submodule update
 4. copy submodule/proto/*.proto src/
-5. rebar get-deps
-6. rebar compile
+5. ./rebar get-deps
+6. ./rebar compile
 7. modify server.config if necessary
 8. ./start.sh
+
+#### Server Application Schema
+
+![schema][7]
+
+*   `cb_observer_sup`   create observer for GUI clients
+*   `cb_player_sup`     create player for AI
+*   `cb_room_sup`       create room when GUI client ask for createrooom, and manager/transform data between observers and players
 
 
 #### How to write AI
@@ -79,7 +88,10 @@ Or, Download the [Windows Executable Files][6].
 [4]: https://github.com/yueyoum/codebattle-proto
 [5]: https://github.com/yueyoum/codebattle-ai
 [6]: http://pan.baidu.com/share/link?shareid=2250845780&uk=3942742758
+[7]: http://i1297.photobucket.com/albums/ag23/yueyoum/otp_zpsc50edf2d.png
 [20]: https://github.com/yueyoum/codebattle-server
 [21]: https://github.com/yueyoum/codebattle-proto
 [22]: https://github.com/yueyoum/codebattle-ai
 [23]: https://github.com/yueyoum/codebattle-client
+[24]: http://v.youku.com/v_show/id_XNTk0OTk2Mjg0.html
+[25]: http://www.youtube.com/watch?v=V6PkjlUXV6w&feature=youtu.be
